@@ -2,12 +2,7 @@
 
 devctl is a small tmux-based development session manager.
 
-It creates one tmux session per project folder and opens separate windows for:
-
-- shell
-- opencode
-- claude
-- codex
+It creates one tmux session per project folder and opens configurable tmux windows for development tools like shell, opencode, claude, and codex.
 
 This is useful for remote development from a tablet or another SSH client. If the connection drops, the tmux session keeps running.
 
@@ -18,6 +13,8 @@ Run:
     git clone git@git.home.lan:sezeryildirim/devctl.git
     cd devctl
     ./install.sh
+
+The installer checks required dependencies and optionally installs supported tools if they are missing.
 
 ## Uninstall
 
@@ -55,9 +52,45 @@ Kill a specific development session:
 
     dev kill <session-name>
 
-Example:
+Show the active config:
 
-    dev kill dev-certificate-creation-app-a1b2c3d4
+    dev config
+
+## Config
+
+Config file location:
+
+    ~/.config/devctl/config
+
+Default config:
+
+    shell:shell:on
+    opencode:opencode:on
+    claude:claude:on
+    codex:codex:on
+
+Format:
+
+    window_name:command:on/off
+
+Examples:
+
+Disable codex:
+
+    codex:codex:off
+
+Change window order by changing line order:
+
+    shell:shell:on
+    claude:claude:on
+    opencode:opencode:on
+    codex:codex:on
+
+Add another tool:
+
+    lazygit:lazygit:on
+
+If a command does not exist, devctl skips that window automatically.
 
 ## Project-based sessions
 
@@ -90,8 +123,16 @@ Switch windows:
 
 ## Requirements
 
+Required:
+
 - bash
 - tmux
+- realpath
+- sha1sum
+- curl
+
+Optional:
+
 - opencode
 - claude
 - codex

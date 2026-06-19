@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 
 DEFAULT_PROJECT_DIR="$HOME/projects"
+CONFIG_DIR="$HOME/.config/devctl"
+CONFIG_FILE="$CONFIG_DIR/config"
 COMMAND="${1:-start}"
 PROJECT_DIR="${2:-$PWD}"
 
@@ -14,6 +16,22 @@ PROJECT_HASH="$(echo "$PROJECT_DIR" | sha1sum | cut -c1-8)"
 SESSION="dev-${PROJECT_NAME}-${PROJECT_HASH}"
 
 mkdir -p "$PROJECT_DIR"
+mkdir -p "$CONFIG_DIR"
+
+create_default_config() {
+  if [ ! -f "$CONFIG_FILE" ]; then
+    cat > "$CONFIG_FILE" <<'CONFIG_EOF'
+shell:shell:on
+opencode:opencode:on
+claude:claude:on
+codex:codex:on
+CONFIG_EOF
+  fi
+}
+
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
 
 attach_or_switch() {
   if [ -n "$TMUX" ]; then
@@ -23,22 +41,55 @@ attach_or_switch() {
   fi
 }
 
+create_windows() {
+  local first_window_created="false"
+
+  while IFS=":" read -r window_name window_command enabled; do
+    if [ -z "$window_name" ] || [ -z "$window_command" ] || [ -z "$enabled" ]; then
+      continue
+    fi
+
+    if [ "$enabled" != "on" ]; then
+      continue
+    fi
+
+    if [ "$window_command" != "shell" ] && ! command_exists "$window_command"; then
+      continue
+    fi
+
+    if [ "$first_window_created" = "false" ]; then
+      tmux new-session -d -s "$SESSION" -c "$PROJECT_DIR" -n "$window_name"
+      first_window_created="true"
+
+      if [ "$window_command" != "shell" ]; then
+        tmux send-keys -t "$SESSION:$window_name" "$window_command" C-m
+      fi
+
+      continue
+    fi
+
+    tmux new-window -t "$SESSION" -c "$PROJECT_DIR" -n "$window_name"
+
+    if [ "$window_command" != "shell" ]; then
+      tmux send-keys -t "$SESSION:$window_name" "$window_command" C-m
+    fi
+  done < "$CONFIG_FILE"
+
+  if [ "$first_window_created" = "false" ]; then
+    tmux new-session -d -s "$SESSION" -c "$PROJECT_DIR" -n shell
+  fi
+}
+
 start_dev() {
+  create_default_config
+
   if tmux has-session -t "$SESSION" 2>/dev/null; then
     attach_or_switch
     exit 0
   fi
 
-  tmux new-session -d -s "$SESSION" -c "$PROJECT_DIR" -n shell
-  tmux new-window -t "$SESSION" -c "$PROJECT_DIR" -n opencode
-  tmux new-window -t "$SESSION" -c "$PROJECT_DIR" -n claude
-  tmux new-window -t "$SESSION" -c "$PROJECT_DIR" -n codex
-
-  tmux send-keys -t "$SESSION:opencode" "opencode" C-m
-  tmux send-keys -t "$SESSION:claude" "claude" C-m
-  tmux send-keys -t "$SESSION:codex" "codex" C-m
-
-  tmux select-window -t "$SESSION:shell"
+  create_windows
+  tmux select-window -t "$SESSION:1"
   attach_or_switch
 }
 
@@ -82,6 +133,12 @@ list_dev() {
   tmux list-sessions 2>/dev/null | grep '^dev-' || echo "no dev sessions"
 }
 
+config_dev() {
+  create_default_config
+  echo "$CONFIG_FILE"
+  cat "$CONFIG_FILE"
+}
+
 case "$COMMAND" in
   start)
     start_dev
@@ -102,8 +159,11 @@ case "$COMMAND" in
   list)
     list_dev
     ;;
+  config)
+    config_dev
+    ;;
   *)
-    echo "Usage: dev [start|stop|restart|status|list|kill] [path|session-name]"
+    echo "Usage: dev [start|stop|restart|status|list|kill|config] [path|session-name]"
     exit 1
     ;;
 esac
