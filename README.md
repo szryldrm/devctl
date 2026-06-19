@@ -52,9 +52,22 @@ Kill a specific development session:
 
     dev kill <session-name>
 
-Show the active config:
+Open the interactive config editor:
 
     dev config
+
+Editor keys:
+
+    ↑/↓        select window
+    Tab        toggle on/off
+    Enter / e  edit name and command
+    a          add window
+    d          delete window
+    u          move selected window up
+    j          move selected window down
+    q / Esc    exit
+
+Changes are saved automatically.
 
 ## Config
 

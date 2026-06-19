@@ -324,6 +324,19 @@ def add_item(stdscr, items):
     save_items(items)
     return f"Added {name}"
 
+def render(stdscr, items, selected, message):
+    height, width = stdscr.getmaxyx()
+
+    try:
+        if width < 56 or height < 16:
+            draw_small(stdscr, items, selected, message)
+        else:
+            draw(stdscr, items, selected, message)
+    except curses.error:
+        # A too-small terminal can push a write past the screen edge.
+        # Skip the frame rather than crash the editor.
+        pass
+
 def main(stdscr):
     curses.curs_set(0)
     curses.use_default_colors()
@@ -342,7 +355,7 @@ def main(stdscr):
         if selected >= len(items):
             selected = max(0, len(items) - 1)
 
-        draw(stdscr, items, selected, message)
+        render(stdscr, items, selected, message)
         key = stdscr.getch()
         message = ""
 
