@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+
+DEFAULT_PROJECT_DIR="$HOME/projects"
+COMMAND="${1:-start}"
+PROJECT_DIR="${2:-$PWD}"
+
+if [ "$PROJECT_DIR" = "$HOME" ]; then
+  PROJECT_DIR="$DEFAULT_PROJECT_DIR"
+fi
+
+PROJECT_DIR="$(realpath "$PROJECT_DIR")"
+PROJECT_NAME="$(basename "$PROJECT_DIR")"
+PROJECT_HASH="$(echo "$PROJECT_DIR" | sha1sum | cut -c1-8)"
+SESSION="dev-${PROJECT_NAME}-${PROJECT_HASH}"
+
+mkdir -p "$PROJECT_DIR"
+
+attach_or_switch() {
+  if [ -n "$TMUX" ]; then
+    tmux switch-client -t "$SESSION"
+  else
+    tmux attach -t "$SESSION"
+  fi
+}
+
+start_dev() {
+  if tmux has-session -t "$SESSION" 2>/dev/null; then
+    attach_or_switch
+    exit 0
+  fi
+
+  tmux new-session -d -s "$SESSION" -c "$PROJECT_DIR" -n shell
+  tmux new-window -t "$SESSION" -c "$PROJECT_DIR" -n opencode
+  tmux new-window -t "$SESSION" -c "$PROJECT_DIR" -n claude
+  tmux new-window -t "$SESSION" -c "$PROJECT_DIR" -n codex
+
+  tmux send-keys -t "$SESSION:opencode" "opencode" C-m
+  tmux send-keys -t "$SESSION:claude" "claude" C-m
+  tmux send-keys -t "$SESSION:codex" "codex" C-m
+
+  tmux select-window -t "$SESSION:shell"
+  attach_or_switch
+}
+
+stop_dev() {
+  if tmux has-session -t "$SESSION" 2>/dev/null; then
+    tmux kill-session -t "$SESSION"
+    echo "stopped: $SESSION"
+  else
+    echo "not running: $SESSION"
+  fi
+}
+
+kill_dev() {
+  TARGET="$2"
+
+  if [ -z "$TARGET" ]; then
+    echo "Usage: dev kill <session-name>"
+    exit 1
+  fi
+
+  if tmux has-session -t "$TARGET" 2>/dev/null; then
+    tmux kill-session -t "$TARGET"
+    echo "killed: $TARGET"
+  else
+    echo "not found: $TARGET"
+  fi
+}
+
+status_dev() {
+  if tmux has-session -t "$SESSION" 2>/dev/null; then
+    echo "running: $SESSION"
+    echo "path: $PROJECT_DIR"
+    tmux list-windows -t "$SESSION"
+  else
+    echo "not running: $SESSION"
+    echo "path: $PROJECT_DIR"
+  fi
+}
+
+list_dev() {
+  tmux list-sessions 2>/dev/null | grep '^dev-' || echo "no dev sessions"
+}
+
+case "$COMMAND" in
+  start)
+    start_dev
+    ;;
+  stop)
+    stop_dev
+    ;;
+  kill)
+    kill_dev "$@"
+    ;;
+  restart)
+    stop_dev
+    start_dev
+    ;;
+  status)
+    status_dev
+    ;;
+  list)
+    list_dev
+    ;;
+  *)
+    echo "Usage: dev [start|stop|restart|status|list|kill] [path|session-name]"
+    exit 1
+    ;;
+esac
