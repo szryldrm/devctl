@@ -6,6 +6,10 @@ INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="$HOME/.config/devctl"
 CONFIG_FILE="$CONFIG_DIR/config"
 
+SELECT_OPENCODE="off"
+SELECT_CLAUDE="off"
+SELECT_CODEX="off"
+
 BOLD="\033[1m"
 DIM="\033[2m"
 GREEN="\033[32m"
@@ -15,11 +19,19 @@ RED="\033[31m"
 RESET="\033[0m"
 
 print_header() {
-  echo
-  echo -e "${BLUE}${BOLD}╭──────────────────────────────╮${RESET}"
-  echo -e "${BLUE}${BOLD}│        devctl installer       │${RESET}"
-  echo -e "${BLUE}${BOLD}╰──────────────────────────────╯${RESET}"
-  echo
+  clear 2>/dev/null || true
+
+  gum style \
+    --foreground 212 \
+    --border-foreground 57 \
+    --border double \
+    --align center \
+    --width 64 \
+    --margin "1 0" \
+    --padding "1 3" \
+    "devctl" \
+    "Remote Development Session Manager" \
+    "tmux + opencode + claude + codex"
 }
 
 info() {
@@ -36,6 +48,58 @@ warn() {
 
 error() {
   echo -e "${RED}✗${RESET} $1"
+}
+
+select_tools() {
+  SELECT_OPENCODE="off"
+  SELECT_CLAUDE="off"
+  SELECT_CODEX="off"
+
+  gum style \
+    --foreground 212 \
+    --border-foreground 57 \
+    --border double \
+    --align center \
+    --width 56 \
+    --margin "1 0" \
+    --padding "1 3" \
+    "devctl setup" "Select tools to install and enable"
+
+  local selected
+
+  selected="$(gum choose --no-limit \
+    --cursor "› " \
+    --selected "● " \
+    --unselected-prefix "○ " \
+    --height 8 \
+    --header "Use Space to select, Enter to continue" \
+    "opencode" \
+    "claude" \
+    "codex")"
+
+  if echo "$selected" | grep -qx "opencode"; then
+    SELECT_OPENCODE="on"
+  fi
+
+  if echo "$selected" | grep -qx "claude"; then
+    SELECT_CLAUDE="on"
+  fi
+
+  if echo "$selected" | grep -qx "codex"; then
+    SELECT_CODEX="on"
+  fi
+
+  echo
+  gum style \
+    --foreground 46 \
+    --border-foreground 46 \
+    --border rounded \
+    --padding "1 2" \
+    "Selected tools" \
+    "opencode: $SELECT_OPENCODE" \
+    "claude:   $SELECT_CLAUDE" \
+    "codex:    $SELECT_CODEX"
+  echo
 }
 
 ask_yes_no() {
@@ -92,6 +156,7 @@ ensure_required_dependencies() {
   has_command curl || missing_packages+=("curl")
   has_command git || missing_packages+=("git")
   has_command ssh || missing_packages+=("openssh-client")
+  has_command gum || missing_packages+=("gum")
   [ -f /etc/ssl/certs/ca-certificates.crt ] || missing_packages+=("ca-certificates")
 
   if [ "${#missing_packages[@]}" -eq 0 ]; then
@@ -192,13 +257,21 @@ install_codex_if_missing() {
 write_config() {
   mkdir -p "$CONFIG_DIR"
 
-  local opencode_status="off"
-  local claude_status="off"
-  local codex_status="off"
+  local opencode_status="$SELECT_OPENCODE"
+  local claude_status="$SELECT_CLAUDE"
+  local codex_status="$SELECT_CODEX"
 
-  has_command opencode && opencode_status="on"
-  has_command claude && claude_status="on"
-  has_command codex && codex_status="on"
+  if [ "$SELECT_OPENCODE" = "on" ] && ! has_command opencode; then
+    opencode_status="off"
+  fi
+
+  if [ "$SELECT_CLAUDE" = "on" ] && ! has_command claude; then
+    claude_status="off"
+  fi
+
+  if [ "$SELECT_CODEX" = "on" ] && ! has_command codex; then
+    codex_status="off"
+  fi
 
   if [ ! -f "$CONFIG_FILE" ]; then
     cat > "$CONFIG_FILE" <<CONFIG_EOF
@@ -213,20 +286,18 @@ CONFIG_EOF
 
   info "Config already exists: $CONFIG_FILE"
 
-  ensure_config_line "opencode" "opencode" "$opencode_status"
-  ensure_config_line "claude" "claude" "$claude_status"
-  ensure_config_line "codex" "codex" "$codex_status"
+  set_config_line "opencode" "opencode" "$opencode_status"
+  set_config_line "claude" "claude" "$claude_status"
+  set_config_line "codex" "codex" "$codex_status"
 }
 
-ensure_config_line() {
+set_config_line() {
   local window_name="$1"
   local window_command="$2"
   local status="$3"
 
   if grep -q "^$window_name:" "$CONFIG_FILE"; then
-    if [ "$status" = "on" ]; then
-      sed -i "s/^$window_name:$window_command:off$/$window_name:$window_command:on/" "$CONFIG_FILE"
-    fi
+    sed -i "s/^$window_name:$window_command:.*$/$window_name:$window_command:$status/" "$CONFIG_FILE"
     return 0
   fi
 
@@ -264,25 +335,69 @@ BASHRC_EOF
 
 print_summary() {
   echo
-  echo -e "${GREEN}${BOLD}Installation completed${RESET}"
+
+  gum style \
+    --foreground 46 \
+    --border-foreground 46 \
+    --border double \
+    --align center \
+    --width 64 \
+    --padding "1 3" \
+    "Installation completed" \
+    "devctl is ready to use"
+
   echo
-  echo -e "${BOLD}Installed command:${RESET}"
-  echo "  dev"
+  gum style --foreground 212 --bold "COMMAND"
+  gum style --foreground 46 "  dev"
+
   echo
-  echo -e "${BOLD}Config file:${RESET}"
-  echo "  $CONFIG_FILE"
+  gum style --foreground 212 --bold "CONFIG"
+  gum style --foreground 39 "  $CONFIG_FILE"
+
   echo
-  echo -e "${BOLD}Current config:${RESET}"
-  sed 's/^/  /' "$CONFIG_FILE"
+  gum style --foreground 212 --bold "WINDOWS"
+
+  printf "  %-4s %-14s %-18s %-8s\n" "#" "name" "command" "status"
+  echo "  ────────────────────────────────────────────"
+
+  local index=1
+
+  while IFS=":" read -r window_name window_command enabled; do
+    if [ -z "$window_name" ] || [ -z "$window_command" ] || [ -z "$enabled" ]; then
+      continue
+    fi
+
+    if [ "$enabled" = "on" ]; then
+      printf "  \033[32m%-4s\033[0m %-14s %-18s \033[32m%s\033[0m\n" "$index" "$window_name" "$window_command" "on"
+    else
+      printf "  \033[33m%-4s\033[0m %-14s %-18s \033[33m%s\033[0m\n" "$index" "$window_name" "$window_command" "off"
+    fi
+
+    index=$((index + 1))
+  done < "$CONFIG_FILE"
+
   echo
-  echo -e "${BOLD}Usage:${RESET}"
-  echo "  dev start      Start or attach current project session"
-  echo "  dev stop       Stop current project session"
-  echo "  dev restart    Restart current project session"
-  echo "  dev list       List all dev sessions"
-  echo "  dev config     Show active config"
+  gum style --foreground 212 --bold "COMMANDS"
+  echo "  dev start             Start or attach current project"
+  echo "  dev stop              Stop current project session"
+  echo "  dev restart           Restart current project session"
+  echo "  dev status            Show current project session"
+  echo "  dev list              List all dev sessions"
+  echo "  dev kill <session>    Kill a specific session"
+  echo "  dev config            Show config"
+
   echo
-  echo -e "${DIM}Tip: open a new terminal or run: source ~/.bashrc${RESET}"
+  gum style --foreground 212 --bold "NEXT"
+  gum style \
+    --foreground 250 \
+    --border rounded \
+    --border-foreground 240 \
+    --padding "1 2" \
+    "cd ~/projects/my-project" \
+    "dev start"
+
+  echo
+  gum style --foreground 244 "Open a new terminal or run: source ~/.bashrc"
   echo
 }
 
@@ -296,12 +411,24 @@ fi
 refresh_path
 ensure_required_dependencies
 
-install_opencode_if_missing || true
-install_claude_if_missing || true
-install_codex_if_missing || true
+select_tools
+
+if [ "$SELECT_OPENCODE" = "on" ]; then
+  install_opencode_if_missing || true
+fi
+
+if [ "$SELECT_CLAUDE" = "on" ]; then
+  install_claude_if_missing || true
+fi
+
+if [ "$SELECT_CODEX" = "on" ]; then
+  install_codex_if_missing || true
+fi
 
 install -m 755 ./bin/dev "$INSTALL_DIR/dev"
+install -m 755 ./bin/dev-config "$INSTALL_DIR/dev-config"
 success "Installed dev command to $INSTALL_DIR/dev"
+success "Installed dev-config command to $INSTALL_DIR/dev-config"
 
 append_shell_path_if_needed
 refresh_path
