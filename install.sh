@@ -401,15 +401,14 @@ print_summary() {
   echo
 }
 
-print_header
-
 if [ ! -f "./bin/dev" ]; then
-  error "bin/dev not found"
+  echo "bin/dev not found"
   exit 1
 fi
 
 refresh_path
 ensure_required_dependencies
+print_header
 
 select_tools
 
