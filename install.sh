@@ -26,17 +26,43 @@ has_command() {
   command -v "$1" >/dev/null 2>&1
 }
 
-require_command() {
-  local command_name="$1"
-  local package_name="$2"
+is_root() {
+  [ "$(id -u)" -eq 0 ]
+}
 
-  if has_command "$command_name"; then
+apt_install() {
+  if ! has_command apt; then
+    echo "apt not found. Please install required packages manually."
+    exit 1
+  fi
+
+  if is_root; then
+    apt update
+    apt install -y "$@"
+  else
+    sudo apt update
+    sudo apt install -y "$@"
+  fi
+}
+
+ensure_required_dependencies() {
+  local missing_packages=()
+
+  has_command bash || missing_packages+=("bash")
+  has_command tmux || missing_packages+=("tmux")
+  has_command realpath || missing_packages+=("coreutils")
+  has_command sha1sum || missing_packages+=("coreutils")
+  has_command curl || missing_packages+=("curl")
+  has_command git || missing_packages+=("git")
+  has_command ssh || missing_packages+=("openssh-client")
+  [ -f /etc/ssl/certs/ca-certificates.crt ] || missing_packages+=("ca-certificates")
+
+  if [ "${#missing_packages[@]}" -eq 0 ]; then
     return 0
   fi
 
-  echo "Missing required command: $command_name"
-  echo "Install it with: apt install -y $package_name"
-  exit 1
+  echo "Installing required dependencies: ${missing_packages[*]}"
+  apt_install "${missing_packages[@]}"
 }
 
 install_node_if_missing() {
@@ -161,11 +187,7 @@ if [ ! -f "./bin/dev" ]; then
   exit 1
 fi
 
-require_command bash bash
-require_command tmux tmux
-require_command realpath coreutils
-require_command sha1sum coreutils
-require_command curl curl
+ensure_required_dependencies
 
 install_opencode_if_missing || true
 install_claude_if_missing || true
