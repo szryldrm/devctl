@@ -7,11 +7,17 @@ from pathlib import Path
 
 config_file = Path(os.environ.get("DEVCTL_CONFIG_FILE", str(Path.home() / ".config/devctl/config")))
 
+DEFAULT_CONFIG = "shell:shell:on\nopencode:opencode:on\nclaude:claude:on\ncodex:codex:on\n"
+
+# ---------------------------------------------------------------------------
+# Data
+# ---------------------------------------------------------------------------
+
 def load_items():
     config_file.parent.mkdir(parents=True, exist_ok=True)
 
     if not config_file.exists():
-        config_file.write_text("shell:shell:on\nopencode:opencode:on\nclaude:claude:on\ncodex:codex:on\n")
+        config_file.write_text(DEFAULT_CONFIG)
 
     items = []
 
@@ -19,396 +25,429 @@ def load_items():
         parts = line.split(":", 2)
 
         if len(parts) == 3:
-            items.append({
-                "name": parts[0],
-                "command": parts[1],
-                "enabled": parts[2]
-            })
+            items.append({"name": parts[0], "command": parts[1], "enabled": parts[2]})
 
     return items
 
 def save_items(items):
-    content = ""
+    config_file.write_text("".join(f"{i['name']}:{i['command']}:{i['enabled']}\n" for i in items))
 
-    for item in items:
-        content += f"{item['name']}:{item['command']}:{item['enabled']}\n"
+# ---------------------------------------------------------------------------
+# Theme
+# ---------------------------------------------------------------------------
 
-    config_file.write_text(content)
+PAIRS = {}
 
-def center_x(width, text):
-    return max(0, (width - len(text)) // 2)
+def setup_colors():
+    curses.start_color()
+    curses.use_default_colors()
 
-def draw_box(stdscr, y, x, w, h, title=None):
-    if w < 4 or h < 3:
+    if curses.COLORS >= 256:
+        accent, sky, green, amber, red = 141, 117, 114, 215, 203
+        text, dim, bar, selbg, offbg, dark = 252, 244, 236, 237, 238, 236
+    else:
+        accent, sky, green = curses.COLOR_MAGENTA, curses.COLOR_CYAN, curses.COLOR_GREEN
+        amber, red = curses.COLOR_YELLOW, curses.COLOR_RED
+        text, dim, bar = curses.COLOR_WHITE, curses.COLOR_WHITE, curses.COLOR_BLUE
+        selbg, offbg, dark = curses.COLOR_BLUE, curses.COLOR_BLACK, curses.COLOR_BLACK
+
+    spec = {
+        "accent":     (accent, -1),
+        "text":       (text, -1),
+        "muted":      (dim, -1),
+        "cmd":        (sky, -1),
+        "toast":      (green, -1),
+        "warn":       (amber, -1),
+        "danger":     (red, -1),
+        "bar":        (dim, bar),
+        "brand":      (dark, accent),
+        "key":        (dark, accent),
+        "keylabel":   (text, bar),
+        "on":         (dark, green),
+        "off":        (dim, offbg),
+        "sel_text":   (text, selbg),
+        "sel_muted":  (dim, selbg),
+        "sel_accent": (accent, selbg),
+        "sel_cmd":    (sky, selbg),
+    }
+
+    index = 1
+    for name, (fg, bg) in spec.items():
+        try:
+            curses.init_pair(index, fg, bg)
+        except curses.error:
+            curses.init_pair(index, curses.COLOR_WHITE, -1)
+        PAIRS[name] = index
+        index += 1
+
+def attr(name, bold=False):
+    a = curses.color_pair(PAIRS.get(name, 0))
+    if bold:
+        a |= curses.A_BOLD
+    return a
+
+# ---------------------------------------------------------------------------
+# Low-level drawing helpers (all clipped + crash-safe)
+# ---------------------------------------------------------------------------
+
+def put(stdscr, y, x, text, a=0):
+    h, w = stdscr.getmaxyx()
+
+    if y < 0 or y >= h:
         return
 
-    stdscr.addstr(y, x, "╭" + "─" * (w - 2) + "╮")
-    for row in range(1, h - 1):
-        stdscr.addstr(y + row, x, "│" + " " * (w - 2) + "│")
-    stdscr.addstr(y + h - 1, x, "╰" + "─" * (w - 2) + "╯")
+    if x < 0:
+        text = text[-x:]
+        x = 0
 
-    if title:
-        label = f" {title} "
-        stdscr.addstr(y, x + max(2, (w - len(label)) // 2), label[:w - 4])
+    if x >= w:
+        return
+
+    text = text[: w - x]
+
+    try:
+        stdscr.addstr(y, x, text, a)
+    except curses.error:
+        pass
+
+def fill(stdscr, y, a):
+    h, w = stdscr.getmaxyx()
+
+    if y < 0 or y >= h:
+        return
+
+    try:
+        stdscr.addstr(y, 0, " " * (w - 1), a)
+        stdscr.insstr(y, w - 1, " ", a)
+    except curses.error:
+        pass
 
 def truncate(value, length):
+    if length <= 0:
+        return ""
     if len(value) <= length:
         return value
+    if length == 1:
+        return "…"
+    return value[: length - 1] + "…"
 
-    if length <= 1:
-        return value[:length]
+# ---------------------------------------------------------------------------
+# Full layout
+# ---------------------------------------------------------------------------
 
-    return value[:length - 1] + "…"
+def draw_header(stdscr, width, count):
+    fill(stdscr, 0, attr("bar"))
+    fill(stdscr, 1, attr("bar"))
 
-def draw_small(stdscr, items, selected, message):
-    stdscr.erase()
-    height, width = stdscr.getmaxyx()
+    put(stdscr, 0, 0, "  ", attr("bar"))
+    put(stdscr, 0, 2, " ◆ devctl ", attr("brand", bold=True))
+    put(stdscr, 0, 12, "  development session manager", attr("bar"))
 
-    title = "devctl config"
-    subtitle = "Tab toggle | e edit | a add | d delete | q exit"
+    badge = f"{count} window{'s' if count != 1 else ''} "
+    put(stdscr, 0, width - len(badge) - 1, badge, attr("bar"))
 
-    stdscr.attron(curses.color_pair(1) | curses.A_BOLD)
-    stdscr.addstr(1, center_x(width, title), truncate(title, width - 1))
-    stdscr.attroff(curses.color_pair(1) | curses.A_BOLD)
+    path = truncate(str(config_file), width - 4)
+    put(stdscr, 1, 2, path, attr("bar"))
 
-    visible_rows = max(1, height - 7)
+def draw_table(stdscr, items, selected, top, height, width):
+    left = 2
+    no_w = 3
+    status_w = 7
+
+    name_w = max(10, min(20, max((len(i["name"]) for i in items), default=8) + 2))
+    gap = 2
+    command_w = max(12, width - left - no_w - name_w - status_w - (gap * 4) - 2)
+
+    header_y = top
+    cols = (
+        " " * no_w
+        + " " * gap
+        + f"{'WINDOW':<{name_w}}"
+        + " " * gap
+        + f"{'COMMAND':<{command_w}}"
+        + " " * gap
+        + "STATUS"
+    )
+    put(stdscr, header_y, left, truncate(cols, width - left - 1), attr("muted", bold=True))
+    put(stdscr, header_y + 1, left, "─" * min(width - left - 2, len(cols) + 2), attr("muted"))
+
+    rows_top = header_y + 2
+    visible = max(1, height - rows_top - 4)
+
     offset = 0
+    if selected >= visible:
+        offset = selected - visible + 1
 
-    if selected >= visible_rows:
-        offset = selected - visible_rows + 1
+    for vi, item in enumerate(items[offset : offset + visible]):
+        idx = offset + vi
+        y = rows_top + vi
+        is_sel = idx == selected
+        enabled = item["enabled"] == "on"
 
-    y = 3
-
-    for visible_index, item in enumerate(items[offset:offset + visible_rows]):
-        index = offset + visible_index
-        status = item["enabled"]
-        marker = "●" if status == "on" else "○"
-
-        name_width = min(16, max(8, width // 4))
-        command_width = min(28, max(10, width - name_width - 18))
-
-        name = truncate(item["name"], name_width)
-        command = truncate(item["command"], command_width)
-        line = f"{index + 1:>2}. {name:<{name_width}} {command:<{command_width}} {marker} {status}"
-
-        if index == selected:
-            stdscr.attron(curses.color_pair(2) | curses.A_BOLD)
-            stdscr.addstr(y, 2, truncate(line, width - 4))
-            stdscr.attroff(curses.color_pair(2) | curses.A_BOLD)
-        elif status == "on":
-            stdscr.attron(curses.color_pair(4) | curses.A_BOLD)
-            stdscr.addstr(y, 2, truncate(line, width - 4))
-            stdscr.attroff(curses.color_pair(4) | curses.A_BOLD)
+        if is_sel:
+            fill(stdscr, y, attr("sel_text"))
+            put(stdscr, y, 0, " ▎", attr("sel_accent", bold=True))
+            num_a = attr("sel_muted")
+            name_a = attr("sel_text", bold=True)
+            cmd_a = attr("sel_cmd")
         else:
-            stdscr.attron(curses.color_pair(3))
-            stdscr.addstr(y, 2, truncate(line, width - 4))
-            stdscr.attroff(curses.color_pair(3))
+            num_a = attr("muted")
+            name_a = attr("text", bold=enabled)
+            cmd_a = attr("cmd") if enabled else attr("muted")
 
-        y += 1
+        x = left
+        put(stdscr, y, x, f"{idx + 1:>{no_w}}", num_a)
+        x += no_w + gap
+        put(stdscr, y, x, f"{truncate(item['name'], name_w):<{name_w}}", name_a)
+        x += name_w + gap
+        put(stdscr, y, x, f"{truncate(item['command'], command_w):<{command_w}}", cmd_a)
+        x += command_w + gap
 
-    stdscr.attron(curses.color_pair(3))
-    stdscr.addstr(height - 2, 2, truncate(subtitle, width - 4))
-    stdscr.attroff(curses.color_pair(3))
+        if enabled:
+            put(stdscr, y, x, " ON ", attr("on", bold=True))
+        else:
+            put(stdscr, y, x, " OFF ", attr("off"))
 
+    return rows_top, visible, offset
+
+def draw_footer(stdscr, height, width, message):
+    msg_y = height - 3
     if message:
-        stdscr.attron(curses.color_pair(5))
-        stdscr.addstr(height - 1, 2, truncate(message, width - 4))
-        stdscr.attroff(curses.color_pair(5))
+        icon, pair = message
+        put(stdscr, msg_y, 2, truncate(f"{icon}", width - 4), attr(pair, bold=True))
 
-    stdscr.refresh()
+    bar_y = height - 1
+    fill(stdscr, bar_y, attr("keylabel"))
+
+    hints = [
+        ("↑↓", "move"),
+        ("space", "toggle"),
+        ("⏎", "edit"),
+        ("a", "add"),
+        ("d", "delete"),
+        ("J/K", "reorder"),
+        ("q", "quit"),
+    ]
+
+    x = 1
+    for key, label in hints:
+        key_txt = f" {key} "
+        lbl_txt = f" {label}  "
+        if x + len(key_txt) + len(lbl_txt) >= width:
+            break
+        put(stdscr, bar_y, x, key_txt, attr("key", bold=True))
+        x += len(key_txt)
+        put(stdscr, bar_y, x, lbl_txt, attr("keylabel"))
+        x += len(lbl_txt)
 
 def draw(stdscr, items, selected, message):
     stdscr.erase()
     height, width = stdscr.getmaxyx()
 
-    margin_x = 3
-    margin_y = 1
+    draw_header(stdscr, width, len(items))
 
-    title = "devctl config"
-    config_path = str(config_file)
+    if items:
+        draw_table(stdscr, items, selected, 3, height, width)
+    else:
+        put(stdscr, 5, 4, "No windows configured.", attr("muted"))
+        put(stdscr, 6, 4, "Press 'a' to add one.", attr("muted"))
 
-    stdscr.attron(curses.color_pair(1) | curses.A_BOLD)
-    stdscr.addstr(margin_y, margin_x, truncate(title, width - margin_x - 1))
-    stdscr.attroff(curses.color_pair(1) | curses.A_BOLD)
+    draw_footer(stdscr, height, width, message)
+    stdscr.noutrefresh()
+    curses.doupdate()
 
-    stdscr.attron(curses.color_pair(3))
-    stdscr.addstr(margin_y + 1, margin_x, truncate(config_path, width - margin_x - 1))
-    stdscr.attroff(curses.color_pair(3))
+# ---------------------------------------------------------------------------
+# Compact layout (narrow / short terminals)
+# ---------------------------------------------------------------------------
 
-    max_name_len = max([len(item["name"]) for item in items] + [4])
-    max_command_len = max([len(item["command"]) for item in items] + [7])
-
-    col_no = 5
-    col_name = min(max(max_name_len + 4, 12), 22)
-    col_command = min(max(max_command_len + 4, 16), 34)
-    col_status = 12
-
-    max_table_w = max(40, width - margin_x - 3)
-    table_w = col_no + col_name + col_command + col_status + 5
-
-    if table_w > max_table_w:
-        overflow = table_w - max_table_w
-        col_command = max(12, col_command - overflow)
-        table_w = col_no + col_name + col_command + col_status + 5
-
-    table_x = margin_x
-    table_y = margin_y + 3
-
-    top = "┌" + "─" * col_no + "┬" + "─" * col_name + "┬" + "─" * col_command + "┬" + "─" * col_status + "┐"
-    sep = "├" + "─" * col_no + "┼" + "─" * col_name + "┼" + "─" * col_command + "┼" + "─" * col_status + "┤"
-    bottom = "└" + "─" * col_no + "┴" + "─" * col_name + "┴" + "─" * col_command + "┴" + "─" * col_status + "┘"
-
-    header = (
-        "│"
-        + f"{'#':^{col_no}}"
-        + "│"
-        + f"{'Name':<{col_name}}"
-        + "│"
-        + f"{'Command':<{col_command}}"
-        + "│"
-        + f"{'Status':^{col_status}}"
-        + "│"
-    )
-
-    stdscr.attron(curses.color_pair(3))
-    stdscr.addstr(table_y, table_x, truncate(top, width - table_x - 1))
-    stdscr.addstr(table_y + 1, table_x, truncate(header, width - table_x - 1))
-    stdscr.addstr(table_y + 2, table_x, truncate(sep, width - table_x - 1))
-    stdscr.attroff(curses.color_pair(3))
-
-    visible_rows = max(1, height - table_y - 8)
-    offset = 0
-
-    if selected >= visible_rows:
-        offset = selected - visible_rows + 1
-
-    for visible_index, item in enumerate(items[offset:offset + visible_rows]):
-        index = offset + visible_index
-        y = table_y + 3 + visible_index
-
-        status = item["enabled"]
-        marker = "●" if status == "on" else "○"
-        status_text = f"{marker} {status.upper()}"
-
-        name = truncate(item["name"], col_name - 2)
-        command = truncate(item["command"], col_command - 2)
-
-        row = (
-            "│"
-            + f"{index + 1:^{col_no}}"
-            + "│"
-            + f" {name:<{col_name - 1}}"
-            + "│"
-            + f" {command:<{col_command - 1}}"
-            + "│"
-            + f"{status_text:^{col_status}}"
-            + "│"
-        )
-
-        if index == selected:
-            stdscr.attron(curses.color_pair(2) | curses.A_BOLD)
-            stdscr.addstr(y, table_x, truncate(row, width - table_x - 1))
-            stdscr.attroff(curses.color_pair(2) | curses.A_BOLD)
-        elif status == "on":
-            stdscr.attron(curses.color_pair(4) | curses.A_BOLD)
-            stdscr.addstr(y, table_x, truncate(row, width - table_x - 1))
-            stdscr.attroff(curses.color_pair(4) | curses.A_BOLD)
-        else:
-            stdscr.attron(curses.color_pair(3))
-            stdscr.addstr(y, table_x, truncate(row, width - table_x - 1))
-            stdscr.attroff(curses.color_pair(3))
-
-    bottom_y = table_y + 3 + min(len(items), visible_rows)
-
-    if bottom_y < height - 4:
-        stdscr.attron(curses.color_pair(3))
-        stdscr.addstr(bottom_y, table_x, truncate(bottom, width - table_x - 1))
-        stdscr.attroff(curses.color_pair(3))
-
-    help_y = min(height - 6, bottom_y + 2)
-    divider_x = table_x
-    divider_width = min(table_w, width - divider_x - 1)
-
-    stdscr.attron(curses.color_pair(3))
-    stdscr.addstr(help_y, divider_x, "─" * divider_width)
-    stdscr.attroff(curses.color_pair(3))
-
-    def draw_segmented_line(y, segments):
-        total_length = sum(len(text) for text, _, _ in segments)
-        x = divider_x + max(0, (divider_width - total_length) // 2)
-
-        for text, pair, bold in segments:
-            if x >= width - 1:
-                break
-
-            attr = curses.color_pair(pair)
-
-            if bold:
-                attr = attr | curses.A_BOLD
-
-            stdscr.attron(attr)
-            stdscr.addstr(y, x, truncate(text, width - x - 1))
-            stdscr.attroff(attr)
-
-            x += len(text)
-
-    line_1 = [
-        ("↑/↓", 6, True), (" select", 5, False), ("       ", 3, False),
-        ("Tab", 6, True), (" toggle", 5, False), ("       ", 3, False),
-        ("Enter/e", 6, True), (" edit", 5, False), ("       ", 3, False),
-        ("u/j", 6, True), (" move", 5, False),
-    ]
-
-    line_2 = [
-        ("a", 6, True), (" add", 5, False), ("              ", 3, False),
-        ("d", 6, True), (" delete", 5, False), ("              ", 3, False),
-        ("q/Esc", 6, True), (" exit", 5, False),
-    ]
-
-    draw_segmented_line(help_y + 2, line_1)
-    draw_segmented_line(help_y + 3, line_2)
-
-    if message and help_y + 5 < height:
-        stdscr.attron(curses.color_pair(4) | curses.A_BOLD)
-        stdscr.addstr(help_y + 5, divider_x, truncate(message, divider_width))
-        stdscr.attroff(curses.color_pair(4) | curses.A_BOLD)
-
-    stdscr.refresh()
-
-def prompt(stdscr, label, default=""):
-    curses.echo()
+def draw_small(stdscr, items, selected, message):
+    stdscr.erase()
     height, width = stdscr.getmaxyx()
-    stdscr.move(height - 1, 0)
-    stdscr.clrtoeol()
-    text = f"{label}: "
-    stdscr.addstr(height - 1, 2, text[:width - 4])
-    stdscr.addstr(default)
-    stdscr.refresh()
 
-    value = stdscr.getstr(height - 1, min(width - 2, 2 + len(text) + len(default)), 120).decode("utf-8").strip()
-    curses.noecho()
+    fill(stdscr, 0, attr("bar"))
+    put(stdscr, 0, 1, " ◆ devctl ", attr("brand", bold=True))
 
-    if value:
-        return value
+    top = 2
+    visible = max(1, height - top - 2)
+    offset = 0
+    if selected >= visible:
+        offset = selected - visible + 1
 
-    return default
+    for vi, item in enumerate(items[offset : offset + visible]):
+        idx = offset + vi
+        y = top + vi
+        enabled = item["enabled"] == "on"
+        marker = "●" if enabled else "○"
+        is_sel = idx == selected
 
-def edit_item(stdscr, item):
-    new_name = prompt(stdscr, "name", item["name"])
+        if is_sel:
+            fill(stdscr, y, attr("sel_text"))
+            put(stdscr, y, 0, " ▎", attr("sel_accent", bold=True))
+            text_a = attr("sel_text", bold=True)
+            mark_a = attr("sel_accent", bold=True)
+        else:
+            text_a = attr("text", bold=enabled)
+            mark_a = attr("toast", bold=True) if enabled else attr("muted")
 
-    if new_name:
-        item["name"] = new_name
+        put(stdscr, y, 2, marker, mark_a)
+        put(stdscr, y, 4, truncate(item["name"], width - 6), text_a)
 
-    new_command = prompt(stdscr, "command", item["command"])
+    if message:
+        icon, pair = message
+        put(stdscr, height - 2, 1, truncate(icon, width - 2), attr(pair, bold=True))
 
-    if new_command:
-        item["command"] = new_command
+    fill(stdscr, height - 1, attr("keylabel"))
+    put(stdscr, height - 1, 1, " space ", attr("key", bold=True))
+    put(stdscr, height - 1, 8, "toggle  ", attr("keylabel"))
+    put(stdscr, height - 1, 16, " e ", attr("key", bold=True))
+    put(stdscr, height - 1, 19, "edit  ", attr("keylabel"))
+    put(stdscr, height - 1, 25, " q ", attr("key", bold=True))
+    put(stdscr, height - 1, 28, "quit", attr("keylabel"))
 
-def add_item(stdscr, items):
-    name = prompt(stdscr, "name", "")
-
-    if not name:
-        return "Add cancelled"
-
-    command = prompt(stdscr, "command", name)
-
-    if not command:
-        return "Add cancelled"
-
-    items.append({
-        "name": name,
-        "command": command,
-        "enabled": "on"
-    })
-
-    save_items(items)
-    return f"Added {name}"
+    stdscr.noutrefresh()
+    curses.doupdate()
 
 def render(stdscr, items, selected, message):
     height, width = stdscr.getmaxyx()
 
+    if width < 56 or height < 14:
+        draw_small(stdscr, items, selected, message)
+    else:
+        draw(stdscr, items, selected, message)
+
+# ---------------------------------------------------------------------------
+# Input prompts
+# ---------------------------------------------------------------------------
+
+def prompt(stdscr, label, default=""):
+    height, width = stdscr.getmaxyx()
+    y = height - 1
+
+    fill(stdscr, y, attr("keylabel"))
+    tag = f" {label} "
+    put(stdscr, y, 1, tag, attr("key", bold=True))
+    put(stdscr, y, 1 + len(tag), " ", attr("keylabel"))
+
+    curses.curs_set(1)
+    curses.echo()
+
+    field_x = 1 + len(tag) + 1
+    put(stdscr, y, field_x, default, attr("text"))
+    stdscr.move(y, min(width - 2, field_x + len(default)))
+    stdscr.refresh()
+
     try:
-        if width < 56 or height < 16:
-            draw_small(stdscr, items, selected, message)
-        else:
-            draw(stdscr, items, selected, message)
-    except curses.error:
-        # A too-small terminal can push a write past the screen edge.
-        # Skip the frame rather than crash the editor.
-        pass
+        value = stdscr.getstr(y, field_x, 120).decode("utf-8").strip()
+    except Exception:
+        value = ""
+
+    curses.noecho()
+    curses.curs_set(0)
+
+    return value if value else default
+
+def edit_item(stdscr, item):
+    name = prompt(stdscr, "name", item["name"])
+    if name:
+        item["name"] = name
+
+    command = prompt(stdscr, "command", item["command"])
+    if command:
+        item["command"] = command
+
+def add_item(stdscr, items):
+    name = prompt(stdscr, "new name", "")
+    if not name:
+        return None
+
+    command = prompt(stdscr, "command", name)
+    if not command:
+        return None
+
+    items.append({"name": name, "command": command, "enabled": "on"})
+    save_items(items)
+    return name
+
+# ---------------------------------------------------------------------------
+# Main loop
+# ---------------------------------------------------------------------------
 
 def main(stdscr):
     curses.curs_set(0)
-    curses.use_default_colors()
-    curses.init_pair(1, curses.COLOR_MAGENTA, -1)
-    curses.init_pair(2, curses.COLOR_BLACK, curses.COLOR_CYAN)
-    curses.init_pair(3, curses.COLOR_WHITE, -1)
-    curses.init_pair(4, curses.COLOR_GREEN, -1)
-    curses.init_pair(5, curses.COLOR_YELLOW, -1)
-    curses.init_pair(6, curses.COLOR_RED, -1)
+    setup_colors()
+    stdscr.keypad(True)
 
     items = load_items()
     selected = 0
-    message = "Config is saved automatically"
+    message = ("✓ ready", "toast")
 
     while True:
-        if selected >= len(items):
-            selected = max(0, len(items) - 1)
+        if items and selected >= len(items):
+            selected = len(items) - 1
+        if selected < 0:
+            selected = 0
 
         render(stdscr, items, selected, message)
         key = stdscr.getch()
-        message = ""
+        message = None
 
         if key in (27, ord("q")):
             break
 
-        if key == curses.KEY_UP:
+        if key in (curses.KEY_UP, ord("k")):
             selected = max(0, selected - 1)
             continue
 
-        if key == curses.KEY_DOWN:
+        if key in (curses.KEY_DOWN, ord("j")):
             selected = min(len(items) - 1, selected + 1)
             continue
 
-        if key == 9 and items:
-            items[selected]["enabled"] = "off" if items[selected]["enabled"] == "on" else "on"
-            save_items(items)
-            message = f"{items[selected]['name']} is now {items[selected]['enabled']}"
+        if not items:
+            if key == ord("a"):
+                curses.curs_set(1)
+                name = add_item(stdscr, items)
+                curses.curs_set(0)
+                selected = len(items) - 1
+                message = (f"✓ added {name}", "toast") if name else ("add cancelled", "warn")
             continue
 
-        if key in (10, 13, ord("e")) and items:
-            curses.curs_set(1)
-            edit_item(stdscr, items[selected])
-            curses.curs_set(0)
+        if key in (ord(" "), 9):  # space or Tab
+            items[selected]["enabled"] = "off" if items[selected]["enabled"] == "on" else "on"
             save_items(items)
-            message = f"Updated {items[selected]['name']}"
+            state = items[selected]["enabled"].upper()
+            message = (f"✓ {items[selected]['name']} → {state}", "toast")
+            continue
+
+        if key in (10, 13, curses.KEY_ENTER, ord("e")):
+            edit_item(stdscr, items[selected])
+            save_items(items)
+            message = (f"✓ updated {items[selected]['name']}", "toast")
             continue
 
         if key == ord("a"):
-            curses.curs_set(1)
-            message = add_item(stdscr, items)
-            curses.curs_set(0)
+            name = add_item(stdscr, items)
             selected = len(items) - 1
+            message = (f"✓ added {name}", "toast") if name else ("add cancelled", "warn")
             continue
 
-        if key == ord("d") and items:
+        if key == ord("d"):
             removed = items.pop(selected)
             save_items(items)
-            message = f"Deleted {removed['name']}"
+            message = (f"✓ deleted {removed['name']}", "danger")
             continue
 
-        if key == ord("u") and selected > 0:
+        if key in (curses.KEY_SR, ord("K")) and selected > 0:
             items[selected - 1], items[selected] = items[selected], items[selected - 1]
             selected -= 1
             save_items(items)
-            message = "Moved up"
+            message = ("✓ moved up", "toast")
             continue
 
-        if key == ord("j") and selected < len(items) - 1:
+        if key in (curses.KEY_SF, ord("J")) and selected < len(items) - 1:
             items[selected + 1], items[selected] = items[selected], items[selected + 1]
             selected += 1
             save_items(items)
-            message = "Moved down"
+            message = ("✓ moved down", "toast")
             continue
 
 if __name__ == "__main__":

@@ -10,37 +10,52 @@ SELECT_OPENCODE="off"
 SELECT_CLAUDE="off"
 SELECT_CODEX="off"
 
-# Commands devctl needs to run, mapped to their apt packages below.
+# Commands devctl needs at runtime, mapped to apt packages in apt_pkg_for().
 # gum is handled separately because it may need the charm apt repo.
 REQUIRED_COMMANDS="tmux git curl ssh python3 realpath sha1sum"
 
+STEP_TOTAL=5
+STEP_NO=0
+
+# --- palette (256-color) -----------------------------------------------------
+ACCENT=141
+SKY=117
+GREEN=114
+AMBER=215
+DANGER=203
+MUTED=244
+BORDER=240
+TEXT=252
+
+C_ACCENT="\033[38;5;${ACCENT}m"
+C_SKY="\033[38;5;${SKY}m"
+C_GREEN="\033[38;5;${GREEN}m"
+C_AMBER="\033[38;5;${AMBER}m"
+C_DANGER="\033[38;5;${DANGER}m"
+C_MUTED="\033[38;5;${MUTED}m"
+C_TEXT="\033[38;5;${TEXT}m"
 BOLD="\033[1m"
 DIM="\033[2m"
-GREEN="\033[32m"
-YELLOW="\033[33m"
-BLUE="\033[34m"
-RED="\033[31m"
 RESET="\033[0m"
 
-info() {
-  echo -e "${BLUE}●${RESET} $1"
-}
+# --- plain helpers (work before gum is installed) ----------------------------
+info()    { echo -e "  ${C_SKY}•${RESET} $1"; }
+success() { echo -e "  ${C_GREEN}✓${RESET} $1"; }
+warn()    { echo -e "  ${C_AMBER}!${RESET} $1"; }
+error()   { echo -e "  ${C_DANGER}✗${RESET} $1"; }
 
-success() {
-  echo -e "${GREEN}✓${RESET} $1"
-}
-
-warn() {
-  echo -e "${YELLOW}!${RESET} $1"
-}
-
-error() {
-  echo -e "${RED}✗${RESET} $1"
+rule() {
+  local width="${1:-60}"
+  printf "  ${C_MUTED}"
+  printf '─%.0s' $(seq 1 "$width")
+  printf "${RESET}\n"
 }
 
 step() {
+  STEP_NO=$((STEP_NO + 1))
   echo
-  echo -e "${BOLD}${BLUE}==>${RESET} ${BOLD}$1${RESET}"
+  echo -e "  ${C_ACCENT}${BOLD}STEP ${STEP_NO}/${STEP_TOTAL}${RESET}  ${C_TEXT}${BOLD}$1${RESET}"
+  rule 56
 }
 
 refresh_path() {
@@ -52,24 +67,27 @@ has_command() {
   command -v "$1" >/dev/null 2>&1
 }
 
-is_root() {
-  [ "$(id -u)" -eq 0 ]
-}
+is_root() { [ "$(id -u)" -eq 0 ]; }
 
 run_root() {
-  if is_root; then
-    "$@"
-  else
-    sudo "$@"
-  fi
+  if is_root; then "$@"; else sudo "$@"; fi
 }
 
-ask_yes_no() {
+# gum confirm when available, plain read otherwise.
+confirm() {
   local question="$1"
+
+  if has_command gum; then
+    gum confirm \
+      --prompt.foreground "$ACCENT" \
+      --selected.background "$ACCENT" \
+      --selected.foreground 236 \
+      "$question"
+    return $?
+  fi
+
   local answer
-
-  read -r -p "$(echo -e "${YELLOW}?${RESET} $question [y/N]: ")" answer
-
+  read -r -p "$(echo -e "  ${C_AMBER}?${RESET} $question [y/N]: ")" answer
   case "$answer" in
     y|Y|yes|YES) return 0 ;;
     *) return 1 ;;
@@ -87,7 +105,7 @@ apt_pkg_for() {
 require_apt() {
   if ! has_command apt-get; then
     error "apt-get not found. This installer targets Debian/Ubuntu."
-    error "Please install the missing packages manually: $*"
+    error "Install these packages manually, then re-run: $*"
     exit 1
   fi
 }
@@ -105,18 +123,44 @@ apt_install() {
   run_root apt-get install -y "$@"
 }
 
-# ---------------------------------------------------------------------------
-# Dependency resolution
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Banner
+# -----------------------------------------------------------------------------
+
+banner() {
+  clear 2>/dev/null || true
+  echo
+
+  gum style \
+    --foreground "$ACCENT" \
+    --border double \
+    --border-foreground "$ACCENT" \
+    --align center \
+    --width 60 \
+    --padding "1 4" \
+    --bold \
+    "◆  D E V C T L  ◆" \
+    "" \
+    "Remote Development Session Manager"
+
+  echo
+  gum style --align center --width 64 --foreground "$MUTED" \
+    "tmux  ·  opencode  ·  claude  ·  codex"
+  echo
+}
+
+# -----------------------------------------------------------------------------
+# Dependencies
+# -----------------------------------------------------------------------------
 
 ensure_required_dependencies() {
-  step "Checking required dependencies"
+  echo
+  echo -e "  ${C_ACCENT}${BOLD}BOOTSTRAP${RESET}  ${C_TEXT}${BOLD}Required dependencies${RESET}"
+  rule 56
 
-  local missing_commands=()
   local missing_packages=()
-  local seen_packages=""
-  local cmd
-  local pkg
+  local seen=""
+  local cmd pkg
 
   for cmd in $REQUIRED_COMMANDS; do
     if has_command "$cmd"; then
@@ -124,58 +168,55 @@ ensure_required_dependencies() {
       continue
     fi
 
-    warn "$cmd missing"
-    missing_commands+=("$cmd")
-
+    warn "$cmd ${C_MUTED}(will install)${RESET}"
     pkg="$(apt_pkg_for "$cmd")"
-
-    case " $seen_packages " in
+    case " $seen " in
       *" $pkg "*) ;;
-      *)
-        missing_packages+=("$pkg")
-        seen_packages="$seen_packages $pkg"
-        ;;
+      *) missing_packages+=("$pkg"); seen="$seen $pkg" ;;
     esac
   done
 
-  if [ ! -f /etc/ssl/certs/ca-certificates.crt ]; then
-    warn "ca-certificates missing"
-    missing_packages+=("ca-certificates")
-  else
+  if [ -f /etc/ssl/certs/ca-certificates.crt ]; then
     success "ca-certificates"
+  else
+    warn "ca-certificates ${C_MUTED}(will install)${RESET}"
+    missing_packages+=("ca-certificates")
   fi
 
   if [ "${#missing_packages[@]}" -gt 0 ]; then
-    info "Installing: ${missing_packages[*]}"
+    echo
+    info "Installing: ${C_TEXT}${missing_packages[*]}${RESET}"
     apt_install "${missing_packages[@]}"
   fi
 
-  # Verify the config editor can actually run (python3 + curses stdlib).
+  # The config editor needs python3 + the curses stdlib module.
   if has_command python3 && ! python3 -c "import curses" >/dev/null 2>&1; then
     warn "python3 is missing the curses module (needed by 'dev config')"
     apt_install python3 || true
   fi
 
-  # Re-verify everything is now present.
   local still_missing=()
-
   for cmd in $REQUIRED_COMMANDS; do
     has_command "$cmd" || still_missing+=("$cmd")
   done
 
   if [ "${#still_missing[@]}" -gt 0 ]; then
+    echo
     error "Could not install: ${still_missing[*]}"
-    error "Please install them manually and re-run ./install.sh"
+    error "Install them manually and re-run ./install.sh"
     exit 1
   fi
 
+  echo
   success "All required dependencies are present"
 }
 
-# gum powers the nice UI for the rest of the installer. On Debian/Ubuntu it
-# usually requires the charm apt repository, so install it on its own.
+# gum drives the rest of the UI. On Debian/Ubuntu it usually needs the
+# charm apt repository, so install it on its own before anything pretty.
 ensure_gum() {
-  step "Setting up gum (installer UI)"
+  echo
+  echo -e "  ${C_ACCENT}${BOLD}BOOTSTRAP${RESET}  ${C_TEXT}${BOLD}Installer UI (gum)${RESET}"
+  rule 56
 
   if has_command gum; then
     success "gum already installed"
@@ -187,8 +228,7 @@ ensure_gum() {
     return 0
   fi
 
-  info "Adding charm apt repository for gum"
-
+  info "Adding charm apt repository"
   run_root mkdir -p /etc/apt/keyrings
   curl -fsSL https://repo.charm.sh/apt/gpg.key |
     run_root gpg --dearmor -o /etc/apt/keyrings/charm.gpg
@@ -207,49 +247,24 @@ ensure_gum() {
   exit 1
 }
 
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Optional AI tools
-# ---------------------------------------------------------------------------
-
-print_header() {
-  clear 2>/dev/null || true
-
-  gum style \
-    --foreground 212 \
-    --border-foreground 57 \
-    --border double \
-    --align center \
-    --width 64 \
-    --margin "1 0" \
-    --padding "1 3" \
-    "devctl" \
-    "Remote Development Session Manager" \
-    "tmux + opencode + claude + codex"
-}
+# -----------------------------------------------------------------------------
 
 select_tools() {
-  SELECT_OPENCODE="off"
-  SELECT_CLAUDE="off"
-  SELECT_CODEX="off"
+  step "Select tools"
 
-  gum style \
-    --foreground 212 \
-    --border-foreground 57 \
-    --border double \
-    --align center \
-    --width 56 \
-    --margin "1 0" \
-    --padding "1 3" \
-    "devctl setup" "Select tools to install and enable"
-
+  echo
   local selected
-
   selected="$(gum choose --no-limit \
-    --cursor "› " \
+    --cursor "❯ " \
+    --cursor-prefix "○ " \
     --selected-prefix "● " \
     --unselected-prefix "○ " \
+    --cursor.foreground "$ACCENT" \
+    --selected.foreground "$GREEN" \
     --height 8 \
-    --header "Use Space to select, Enter to continue" \
+    --header "  Space to select · Enter to confirm" \
     "opencode" \
     "claude" \
     "codex")"
@@ -259,16 +274,18 @@ select_tools() {
   echo "$selected" | grep -qx "codex" && SELECT_CODEX="on"
 
   echo
-  gum style \
-    --foreground 46 \
-    --border-foreground 46 \
-    --border rounded \
-    --padding "1 2" \
-    "Selected tools" \
-    "opencode: $SELECT_OPENCODE" \
-    "claude:   $SELECT_CLAUDE" \
-    "codex:    $SELECT_CODEX"
-  echo
+  tool_badge "opencode" "$SELECT_OPENCODE"
+  tool_badge "claude" "$SELECT_CLAUDE"
+  tool_badge "codex" "$SELECT_CODEX"
+}
+
+tool_badge() {
+  local name="$1" state="$2"
+  if [ "$state" = "on" ]; then
+    printf "  ${C_GREEN}●${RESET} %-10s ${C_GREEN}selected${RESET}\n" "$name"
+  else
+    printf "  ${C_MUTED}○ %-10s skipped${RESET}\n" "$name"
+  fi
 }
 
 install_node_if_missing() {
@@ -277,7 +294,7 @@ install_node_if_missing() {
     return 0
   fi
 
-  if ask_yes_no "Node.js/npm is required for Claude Code. Install Node.js 22 now?"; then
+  if confirm "Node.js/npm is required for Claude Code. Install Node.js 22 now?"; then
     curl -fsSL https://deb.nodesource.com/setup_22.x | run_root bash -
     apt_install nodejs
     refresh_path
@@ -285,7 +302,7 @@ install_node_if_missing() {
     return 0
   fi
 
-  warn "Skipping Node.js/npm installation"
+  warn "Skipping Node.js/npm"
   return 1
 }
 
@@ -295,18 +312,12 @@ install_opencode_if_missing() {
     return 0
   fi
 
-  if ask_yes_no "opencode is not installed. Install it now?"; then
+  if confirm "Install opencode now?"; then
     curl -fsSL https://opencode.ai/install | bash
     refresh_path
-
-    if has_command opencode; then
-      success "opencode installed"
-      return 0
-    fi
-
-    warn "opencode installer finished, but opencode is not on PATH yet"
+    has_command opencode && { success "opencode installed"; return 0; }
+    warn "opencode installer finished, but it is not on PATH yet"
   fi
-
   return 1
 }
 
@@ -318,18 +329,12 @@ install_claude_if_missing() {
 
   install_node_if_missing || return 1
 
-  if ask_yes_no "Claude Code is not installed. Install it now?"; then
+  if confirm "Install Claude Code now?"; then
     npm install -g @anthropic-ai/claude-code
     refresh_path
-
-    if has_command claude; then
-      success "Claude Code installed"
-      return 0
-    fi
-
-    warn "Claude Code installer finished, but claude is not on PATH yet"
+    has_command claude && { success "Claude Code installed"; return 0; }
+    warn "Claude Code installer finished, but it is not on PATH yet"
   fi
-
   return 1
 }
 
@@ -339,76 +344,52 @@ install_codex_if_missing() {
     return 0
   fi
 
-  if ask_yes_no "Codex CLI is not installed. Install it now?"; then
+  if confirm "Install Codex CLI now?"; then
     curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh
     refresh_path
-
-    if has_command codex; then
-      success "Codex CLI installed"
-      return 0
-    fi
-
-    warn "Codex installer finished, but codex is not on PATH yet"
+    has_command codex && { success "Codex CLI installed"; return 0; }
+    warn "Codex installer finished, but it is not on PATH yet"
   fi
-
   return 1
 }
 
-# ---------------------------------------------------------------------------
-# Config + PATH
-# ---------------------------------------------------------------------------
+install_selected_tools() {
+  step "Install tools"
 
-set_config_line() {
-  local window_name="$1"
-  local window_command="$2"
-  local status="$3"
-
-  if grep -q "^$window_name:" "$CONFIG_FILE"; then
-    sed -i "s/^$window_name:$window_command:.*$/$window_name:$window_command:$status/" "$CONFIG_FILE"
+  if [ "$SELECT_OPENCODE$SELECT_CLAUDE$SELECT_CODEX" = "offoffoff" ]; then
+    echo
+    info "No tools selected — skipping"
     return 0
   fi
 
-  echo "$window_name:$window_command:$status" >> "$CONFIG_FILE"
+  echo
+  [ "$SELECT_OPENCODE" = "on" ] && { install_opencode_if_missing || true; }
+  [ "$SELECT_CLAUDE" = "on" ] && { install_claude_if_missing || true; }
+  [ "$SELECT_CODEX" = "on" ] && { install_codex_if_missing || true; }
 }
 
-write_config() {
-  step "Writing config"
+# -----------------------------------------------------------------------------
+# Install + config
+# -----------------------------------------------------------------------------
 
-  mkdir -p "$CONFIG_DIR"
+install_binaries() {
+  step "Install devctl"
+  echo
+  run_root install -m 755 ./bin/dev "$INSTALL_DIR/dev"
+  run_root install -m 755 ./bin/dev-config "$INSTALL_DIR/dev-config"
+  success "dev        → $INSTALL_DIR/dev"
+  success "dev-config → $INSTALL_DIR/dev-config"
 
-  local opencode_status="$SELECT_OPENCODE"
-  local claude_status="$SELECT_CLAUDE"
-  local codex_status="$SELECT_CODEX"
-
-  [ "$SELECT_OPENCODE" = "on" ] && ! has_command opencode && opencode_status="off"
-  [ "$SELECT_CLAUDE" = "on" ] && ! has_command claude && claude_status="off"
-  [ "$SELECT_CODEX" = "on" ] && ! has_command codex && codex_status="off"
-
-  if [ ! -f "$CONFIG_FILE" ]; then
-    cat > "$CONFIG_FILE" <<CONFIG_EOF
-shell:shell:on
-opencode:opencode:$opencode_status
-claude:claude:$claude_status
-codex:codex:$codex_status
-CONFIG_EOF
-    success "Created config: $CONFIG_FILE"
-    return 0
-  fi
-
-  info "Config already exists: $CONFIG_FILE"
-
-  set_config_line "opencode" "opencode" "$opencode_status"
-  set_config_line "claude" "claude" "$claude_status"
-  set_config_line "codex" "codex" "$codex_status"
+  append_shell_path_if_needed
+  refresh_path
 }
 
 append_shell_path_if_needed() {
   local bashrc="$HOME/.bashrc"
-
   touch "$bashrc"
 
   if grep -q 'devctl path config' "$bashrc"; then
-    success "Bash PATH config already exists"
+    success "bash PATH already configured"
     return 0
   fi
 
@@ -429,64 +410,102 @@ export PATH
 
 unset -f path_add
 BASHRC_EOF
-  success "Updated bash PATH config: $bashrc"
+  success "updated bash PATH ($bashrc)"
 }
 
-# ---------------------------------------------------------------------------
-# Verification + summary
-# ---------------------------------------------------------------------------
+set_config_line() {
+  local window_name="$1" window_command="$2" status="$3"
+
+  if grep -q "^$window_name:" "$CONFIG_FILE"; then
+    sed -i "s/^$window_name:$window_command:.*$/$window_name:$window_command:$status/" "$CONFIG_FILE"
+    return 0
+  fi
+  echo "$window_name:$window_command:$status" >> "$CONFIG_FILE"
+}
+
+write_config() {
+  step "Write config"
+  echo
+
+  mkdir -p "$CONFIG_DIR"
+
+  local oc="$SELECT_OPENCODE" cl="$SELECT_CLAUDE" cx="$SELECT_CODEX"
+  [ "$oc" = "on" ] && ! has_command opencode && oc="off"
+  [ "$cl" = "on" ] && ! has_command claude && cl="off"
+  [ "$cx" = "on" ] && ! has_command codex && cx="off"
+
+  if [ ! -f "$CONFIG_FILE" ]; then
+    cat > "$CONFIG_FILE" <<CONFIG_EOF
+shell:shell:on
+opencode:opencode:$oc
+claude:claude:$cl
+codex:codex:$cx
+CONFIG_EOF
+    success "created $CONFIG_FILE"
+    return 0
+  fi
+
+  info "updating existing $CONFIG_FILE"
+  set_config_line "opencode" "opencode" "$oc"
+  set_config_line "claude" "claude" "$cl"
+  set_config_line "codex" "codex" "$cx"
+}
+
+# -----------------------------------------------------------------------------
+# Verify + summary
+# -----------------------------------------------------------------------------
+
+check_row() {
+  local label="$1" cmd="$2"
+  if has_command "$cmd"; then
+    printf "  ${C_GREEN}✓${RESET} %-16s ${C_MUTED}%s${RESET}\n" "$label" "$(command -v "$cmd")"
+  else
+    printf "  ${C_DANGER}✗${RESET} %-16s ${C_DANGER}missing${RESET}\n" "$label"
+    VERIFY_OK=0
+  fi
+}
 
 verify_install() {
-  step "Verifying installation"
+  step "Verify"
+  echo
 
-  local ok=1
+  VERIFY_OK=1
 
-  check_command() {
-    local label="$1"
-    local cmd="$2"
-
-    if has_command "$cmd"; then
-      printf "  ${GREEN}✓${RESET} %-20s %s\n" "$label" "$(command -v "$cmd")"
-    else
-      printf "  ${RED}✗${RESET} %-20s %s\n" "$label" "missing"
-      ok=0
-    fi
-  }
-
-  check_command "dev"        "dev"
-  check_command "dev-config" "dev-config"
-  check_command "tmux"       "tmux"
-  check_command "python3"    "python3"
-  check_command "gum"        "gum"
+  check_row "dev" "dev"
+  check_row "dev-config" "dev-config"
+  check_row "tmux" "tmux"
+  check_row "python3" "python3"
+  check_row "gum" "gum"
 
   if python3 -c "import curses" >/dev/null 2>&1; then
-    printf "  ${GREEN}✓${RESET} %-20s %s\n" "python3 curses" "available"
+    printf "  ${C_GREEN}✓${RESET} %-16s ${C_MUTED}available${RESET}\n" "config editor"
   else
-    printf "  ${RED}✗${RESET} %-20s %s\n" "python3 curses" "missing"
-    ok=0
+    printf "  ${C_DANGER}✗${RESET} %-16s ${C_DANGER}python3 curses missing${RESET}\n" "config editor"
+    VERIFY_OK=0
   fi
 
   echo
-  printf "  ${BOLD}%-16s %-12s %s${RESET}\n" "window" "command" "status"
-  printf "  %s\n" "────────────────────────────────────────"
+  printf "  ${C_MUTED}${BOLD}%-2s  %-14s %-14s %s${RESET}\n" "#" "WINDOW" "COMMAND" "STATUS"
+  rule 48
 
+  local i=1
   while IFS=":" read -r window_name window_command enabled; do
     [ -z "$window_name" ] && continue
-
     if [ "$enabled" = "on" ]; then
-      printf "  %-16s %-12s ${GREEN}%s${RESET}\n" "$window_name" "$window_command" "on"
+      printf "  ${C_MUTED}%-2s${RESET}  ${C_TEXT}%-14s${RESET} ${C_SKY}%-14s${RESET} ${C_GREEN}● ON${RESET}\n" \
+        "$i" "$window_name" "$window_command"
     else
-      printf "  %-16s %-12s ${DIM}%s${RESET}\n" "$window_name" "$window_command" "off"
+      printf "  ${C_MUTED}%-2s  %-14s %-14s ○ OFF${RESET}\n" \
+        "$i" "$window_name" "$window_command"
     fi
+    i=$((i + 1))
   done < "$CONFIG_FILE"
 
   echo
-
-  if [ "$ok" -ne 1 ]; then
-    error "Installation finished with missing components (see above)"
+  if [ "$VERIFY_OK" -ne 1 ]; then
+    error "Finished with missing components (see above)"
     return 1
   fi
-
   success "Everything checks out"
 }
 
@@ -494,68 +513,58 @@ print_summary() {
   echo
 
   gum style \
-    --foreground 46 \
-    --border-foreground 46 \
+    --foreground "$GREEN" \
     --border double \
+    --border-foreground "$GREEN" \
     --align center \
-    --width 64 \
+    --width 60 \
     --padding "1 3" \
-    "Installation completed" \
+    --bold \
+    "✓  INSTALLED" \
     "devctl is ready to use"
 
   echo
-  gum style --foreground 212 --bold "COMMANDS"
-  echo "  dev start             Start or attach current project"
-  echo "  dev stop              Stop current project session"
-  echo "  dev restart           Restart current project session"
-  echo "  dev status            Show current project session"
-  echo "  dev list              List all dev sessions"
-  echo "  dev kill <session>    Kill a specific session"
-  echo "  dev config            Open the interactive config editor"
+  echo -e "  ${C_ACCENT}${BOLD}COMMANDS${RESET}"
+  printf "  ${C_SKY}%-22s${RESET}${C_MUTED}%s${RESET}\n" "dev start"        "start or attach the current project"
+  printf "  ${C_SKY}%-22s${RESET}${C_MUTED}%s${RESET}\n" "dev stop"         "stop the current project session"
+  printf "  ${C_SKY}%-22s${RESET}${C_MUTED}%s${RESET}\n" "dev restart"      "restart the current project session"
+  printf "  ${C_SKY}%-22s${RESET}${C_MUTED}%s${RESET}\n" "dev status"       "show the current project session"
+  printf "  ${C_SKY}%-22s${RESET}${C_MUTED}%s${RESET}\n" "dev list"         "list all dev sessions"
+  printf "  ${C_SKY}%-22s${RESET}${C_MUTED}%s${RESET}\n" "dev kill <name>"  "kill a specific session"
+  printf "  ${C_SKY}%-22s${RESET}${C_MUTED}%s${RESET}\n" "dev config"       "open the interactive config editor"
 
   echo
-  gum style --foreground 212 --bold "NEXT"
+  echo -e "  ${C_ACCENT}${BOLD}GET STARTED${RESET}"
   gum style \
-    --foreground 250 \
+    --foreground "$TEXT" \
     --border rounded \
-    --border-foreground 240 \
+    --border-foreground "$BORDER" \
     --padding "1 2" \
     "cd ~/projects/my-project" \
     "dev start"
 
   echo
-  gum style --foreground 244 "Open a new terminal or run: source ~/.bashrc"
+  echo -e "  ${C_MUTED}Open a new terminal or run: ${C_TEXT}source ~/.bashrc${RESET}"
   echo
 }
 
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Main
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
 if [ ! -f "./bin/dev" ] || [ ! -f "./bin/dev-config" ]; then
-  error "Run this script from the devctl repository root (bin/dev not found)"
+  error "Run this from the devctl repository root (bin/dev not found)"
   exit 1
 fi
 
 refresh_path
 ensure_required_dependencies
 ensure_gum
-print_header
+banner
 
 select_tools
-
-[ "$SELECT_OPENCODE" = "on" ] && { install_opencode_if_missing || true; }
-[ "$SELECT_CLAUDE" = "on" ] && { install_claude_if_missing || true; }
-[ "$SELECT_CODEX" = "on" ] && { install_codex_if_missing || true; }
-
-step "Installing devctl"
-run_root install -m 755 ./bin/dev "$INSTALL_DIR/dev"
-run_root install -m 755 ./bin/dev-config "$INSTALL_DIR/dev-config"
-success "Installed dev to $INSTALL_DIR/dev"
-success "Installed dev-config to $INSTALL_DIR/dev-config"
-
-append_shell_path_if_needed
-refresh_path
+install_selected_tools
+install_binaries
 write_config
 verify_install || true
 print_summary
