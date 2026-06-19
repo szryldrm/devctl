@@ -60,6 +60,9 @@ def setup_colors():
         "warn":       (amber, -1),
         "danger":     (red, -1),
         "bar":        (dim, bar),
+        "warnbar":    (amber, bar),
+        "panel":      (text, bar),
+        "panel_border": (accent, bar),
         "brand":      (dark, accent),
         "key":        (dark, accent),
         "keylabel":   (text, bar),
@@ -135,7 +138,7 @@ def truncate(value, length):
 # Full layout
 # ---------------------------------------------------------------------------
 
-def draw_header(stdscr, width, count):
+def draw_header(stdscr, width, count, dirty):
     fill(stdscr, 0, attr("bar"))
     fill(stdscr, 1, attr("bar"))
 
@@ -143,8 +146,12 @@ def draw_header(stdscr, width, count):
     put(stdscr, 0, 2, " ◆ devctl ", attr("brand", bold=True))
     put(stdscr, 0, 12, "  development session manager", attr("bar"))
 
-    badge = f"{count} window{'s' if count != 1 else ''} "
-    put(stdscr, 0, width - len(badge) - 1, badge, attr("bar"))
+    if dirty:
+        badge = " ● unsaved "
+        put(stdscr, 0, width - len(badge) - 1, badge, attr("warnbar", bold=True))
+    else:
+        badge = f"{count} window{'s' if count != 1 else ''} "
+        put(stdscr, 0, width - len(badge) - 1, badge, attr("bar"))
 
     path = truncate(str(config_file), width - 4)
     put(stdscr, 1, 2, path, attr("bar"))
@@ -220,7 +227,7 @@ def draw_footer(stdscr, height, width, message):
     fill(stdscr, bar_y, attr("keylabel"))
 
     hints = [
-        ("↑↓", "move"),
+        ("↑↓", "select"),
         ("space", "toggle"),
         ("⏎", "edit"),
         ("a", "add"),
@@ -240,11 +247,11 @@ def draw_footer(stdscr, height, width, message):
         put(stdscr, bar_y, x, lbl_txt, attr("keylabel"))
         x += len(lbl_txt)
 
-def draw(stdscr, items, selected, message):
+def draw(stdscr, items, selected, message, dirty):
     stdscr.erase()
     height, width = stdscr.getmaxyx()
 
-    draw_header(stdscr, width, len(items))
+    draw_header(stdscr, width, len(items), dirty)
 
     if items:
         draw_table(stdscr, items, selected, 3, height, width)
@@ -260,12 +267,15 @@ def draw(stdscr, items, selected, message):
 # Compact layout (narrow / short terminals)
 # ---------------------------------------------------------------------------
 
-def draw_small(stdscr, items, selected, message):
+def draw_small(stdscr, items, selected, message, dirty):
     stdscr.erase()
     height, width = stdscr.getmaxyx()
 
     fill(stdscr, 0, attr("bar"))
     put(stdscr, 0, 1, " ◆ devctl ", attr("brand", bold=True))
+    if dirty:
+        tag = " ● unsaved "
+        put(stdscr, 0, width - len(tag) - 1, tag, attr("warnbar", bold=True))
 
     top = 2
     visible = max(1, height - top - 2)
@@ -307,13 +317,13 @@ def draw_small(stdscr, items, selected, message):
     stdscr.noutrefresh()
     curses.doupdate()
 
-def render(stdscr, items, selected, message):
+def render(stdscr, items, selected, message, dirty):
     height, width = stdscr.getmaxyx()
 
     if width < 56 or height < 14:
-        draw_small(stdscr, items, selected, message)
+        draw_small(stdscr, items, selected, message, dirty)
     else:
-        draw(stdscr, items, selected, message)
+        draw(stdscr, items, selected, message, dirty)
 
 # ---------------------------------------------------------------------------
 # Input prompts
@@ -365,12 +375,55 @@ def add_item(stdscr, items):
         return None
 
     items.append({"name": name, "command": command, "enabled": "on"})
-    save_items(items)
     return name
+
+def confirm_exit(stdscr):
+    h, w = stdscr.getmaxyx()
+    bw = min(52, max(38, w - 6))
+    bh = 7
+    by = max(0, (h - bh) // 2)
+    bx = max(0, (w - bw) // 2)
+
+    panel = attr("panel")
+    border = attr("panel_border", bold=True)
+
+    for r in range(bh):
+        put(stdscr, by + r, bx, " " * bw, panel)
+
+    put(stdscr, by, bx, "╭" + "─" * (bw - 2) + "╮", border)
+    put(stdscr, by + bh - 1, bx, "╰" + "─" * (bw - 2) + "╯", border)
+    for r in range(1, bh - 1):
+        put(stdscr, by + r, bx, "│", border)
+        put(stdscr, by + r, bx + bw - 1, "│", border)
+
+    title = "Save changes before exiting?"
+    put(stdscr, by + 2, bx + (bw - len(title)) // 2, title, attr("panel", bold=True))
+
+    y_lbl, n_lbl, c_lbl = " y save ", " n discard ", " c cancel "
+    total = len(y_lbl) + len(n_lbl) + len(c_lbl) + 4
+    ox = bx + (bw - total) // 2
+    put(stdscr, by + 4, ox, y_lbl, attr("on", bold=True))
+    put(stdscr, by + 4, ox + len(y_lbl) + 2, n_lbl, attr("off", bold=True))
+    put(stdscr, by + 4, ox + len(y_lbl) + len(n_lbl) + 4, c_lbl, attr("key", bold=True))
+
+    stdscr.noutrefresh()
+    curses.doupdate()
+
+    while True:
+        k = stdscr.getch()
+        if k in (ord("y"), ord("Y")):
+            return "save"
+        if k in (ord("n"), ord("N")):
+            return "discard"
+        if k in (ord("c"), ord("C"), 27):
+            return "cancel"
 
 # ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
+
+def snapshot_of(items):
+    return [(i["name"], i["command"], i["enabled"]) for i in items]
 
 def main(stdscr):
     curses.curs_set(0)
@@ -378,8 +431,9 @@ def main(stdscr):
     stdscr.keypad(True)
 
     items = load_items()
+    saved = snapshot_of(items)
     selected = 0
-    message = ("✓ ready", "toast")
+    message = ("↕ select · space toggle · changes saved on exit", "muted")
 
     while True:
         if items and selected >= len(items):
@@ -387,12 +441,23 @@ def main(stdscr):
         if selected < 0:
             selected = 0
 
-        render(stdscr, items, selected, message)
+        dirty = snapshot_of(items) != saved
+        render(stdscr, items, selected, message, dirty)
         key = stdscr.getch()
         message = None
 
         if key in (27, ord("q")):
-            break
+            if snapshot_of(items) == saved:
+                break
+            choice = confirm_exit(stdscr)
+            if choice == "save":
+                save_items(items)
+                break
+            if choice == "discard":
+                break
+            # cancel: stay in the editor
+            message = ("changes not saved yet", "warn")
+            continue
 
         if key in (curses.KEY_UP, ord("k")):
             selected = max(0, selected - 1)
@@ -413,41 +478,37 @@ def main(stdscr):
 
         if key in (ord(" "), 9):  # space or Tab
             items[selected]["enabled"] = "off" if items[selected]["enabled"] == "on" else "on"
-            save_items(items)
             state = items[selected]["enabled"].upper()
-            message = (f"✓ {items[selected]['name']} → {state}", "toast")
+            message = (f"{items[selected]['name']} → {state}", "toast")
             continue
 
         if key in (10, 13, curses.KEY_ENTER, ord("e")):
             edit_item(stdscr, items[selected])
-            save_items(items)
-            message = (f"✓ updated {items[selected]['name']}", "toast")
+            message = (f"edited {items[selected]['name']}", "toast")
             continue
 
         if key == ord("a"):
             name = add_item(stdscr, items)
             selected = len(items) - 1
-            message = (f"✓ added {name}", "toast") if name else ("add cancelled", "warn")
+            message = (f"added {name}", "toast") if name else ("add cancelled", "warn")
             continue
 
         if key == ord("d"):
             removed = items.pop(selected)
-            save_items(items)
-            message = (f"✓ deleted {removed['name']}", "danger")
+            message = (f"deleted {removed['name']}", "danger")
             continue
 
+        # Reorder: Shift+Up/Down or uppercase K/J move the selected item.
         if key in (curses.KEY_SR, ord("K")) and selected > 0:
             items[selected - 1], items[selected] = items[selected], items[selected - 1]
             selected -= 1
-            save_items(items)
-            message = ("✓ moved up", "toast")
+            message = ("moved up", "toast")
             continue
 
         if key in (curses.KEY_SF, ord("J")) and selected < len(items) - 1:
             items[selected + 1], items[selected] = items[selected], items[selected + 1]
             selected += 1
-            save_items(items)
-            message = ("✓ moved down", "toast")
+            message = ("moved down", "toast")
             continue
 
 if __name__ == "__main__":

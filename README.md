@@ -63,11 +63,12 @@ Editor keys:
     Enter / e        edit name and command
     a                add window
     d                delete window
-    K / Shift+↑      move selected window up
-    J / Shift+↓      move selected window down
+    K / Shift+↑      reorder: move selected window up
+    J / Shift+↓      reorder: move selected window down
     q / Esc          exit
 
-Changes are saved automatically.
+On exit, if you made changes, the editor asks whether to save
+(y save / n discard / c cancel). Nothing is written until you confirm.
 
 ## Config
 
@@ -143,6 +144,7 @@ Required:
 - realpath
 - sha1sum
 - curl
+- python3 (config editor)
 
 Optional:
 
@@ -152,6 +154,7 @@ Optional:
 
 ## Install location
 
-The tool installs the dev command to:
+The installer places:
 
-    /usr/local/bin/dev
+    /usr/local/bin/dev                  the command
+    /usr/local/lib/devctl/dev-config    the config editor (used by "dev config")

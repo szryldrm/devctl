@@ -3,6 +3,7 @@
 set -e
 
 INSTALL_DIR="/usr/local/bin"
+LIBEXEC_DIR="/usr/local/lib/devctl"
 CONFIG_DIR="$HOME/.config/devctl"
 CONFIG_FILE="$CONFIG_DIR/config"
 
@@ -71,27 +72,6 @@ is_root() { [ "$(id -u)" -eq 0 ]; }
 
 run_root() {
   if is_root; then "$@"; else sudo "$@"; fi
-}
-
-# gum confirm when available, plain read otherwise.
-confirm() {
-  local question="$1"
-
-  if has_command gum; then
-    gum confirm \
-      --prompt.foreground "$ACCENT" \
-      --selected.background "$ACCENT" \
-      --selected.foreground 236 \
-      "$question"
-    return $?
-  fi
-
-  local answer
-  read -r -p "$(echo -e "  ${C_AMBER}?${RESET} $question [y/N]: ")" answer
-  case "$answer" in
-    y|Y|yes|YES) return 0 ;;
-    *) return 1 ;;
-  esac
 }
 
 apt_pkg_for() {
@@ -294,15 +274,13 @@ install_node_if_missing() {
     return 0
   fi
 
-  if confirm "Node.js/npm is required for Claude Code. Install Node.js 22 now?"; then
-    curl -fsSL https://deb.nodesource.com/setup_22.x | run_root bash -
-    apt_install nodejs
-    refresh_path
-    success "Node.js/npm installed"
-    return 0
-  fi
+  info "Installing Node.js 22 (required for Claude Code)"
+  curl -fsSL https://deb.nodesource.com/setup_22.x | run_root bash -
+  apt_install nodejs
+  refresh_path
 
-  warn "Skipping Node.js/npm"
+  has_command node && { success "Node.js/npm installed"; return 0; }
+  warn "Node.js install finished, but it is not on PATH yet"
   return 1
 }
 
@@ -312,12 +290,12 @@ install_opencode_if_missing() {
     return 0
   fi
 
-  if confirm "Install opencode now?"; then
-    curl -fsSL https://opencode.ai/install | bash
-    refresh_path
-    has_command opencode && { success "opencode installed"; return 0; }
-    warn "opencode installer finished, but it is not on PATH yet"
-  fi
+  info "Installing opencode"
+  curl -fsSL https://opencode.ai/install | bash
+  refresh_path
+
+  has_command opencode && { success "opencode installed"; return 0; }
+  warn "opencode installer finished, but it is not on PATH yet"
   return 1
 }
 
@@ -329,12 +307,12 @@ install_claude_if_missing() {
 
   install_node_if_missing || return 1
 
-  if confirm "Install Claude Code now?"; then
-    npm install -g @anthropic-ai/claude-code
-    refresh_path
-    has_command claude && { success "Claude Code installed"; return 0; }
-    warn "Claude Code installer finished, but it is not on PATH yet"
-  fi
+  info "Installing Claude Code"
+  npm install -g @anthropic-ai/claude-code
+  refresh_path
+
+  has_command claude && { success "Claude Code installed"; return 0; }
+  warn "Claude Code installer finished, but it is not on PATH yet"
   return 1
 }
 
@@ -344,12 +322,12 @@ install_codex_if_missing() {
     return 0
   fi
 
-  if confirm "Install Codex CLI now?"; then
-    curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh
-    refresh_path
-    has_command codex && { success "Codex CLI installed"; return 0; }
-    warn "Codex installer finished, but it is not on PATH yet"
-  fi
+  info "Installing Codex CLI"
+  curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh
+  refresh_path
+
+  has_command codex && { success "Codex CLI installed"; return 0; }
+  warn "Codex installer finished, but it is not on PATH yet"
   return 1
 }
 
@@ -376,9 +354,10 @@ install_binaries() {
   step "Install devctl"
   echo
   run_root install -m 755 ./bin/dev "$INSTALL_DIR/dev"
-  run_root install -m 755 ./bin/dev-config "$INSTALL_DIR/dev-config"
-  success "dev        → $INSTALL_DIR/dev"
-  success "dev-config → $INSTALL_DIR/dev-config"
+  run_root install -d "$LIBEXEC_DIR"
+  run_root install -m 755 ./bin/dev-config "$LIBEXEC_DIR/dev-config"
+  success "command        → $INSTALL_DIR/dev"
+  success "config editor  → $LIBEXEC_DIR/dev-config"
 
   append_shell_path_if_needed
   refresh_path
@@ -429,10 +408,9 @@ write_config() {
 
   mkdir -p "$CONFIG_DIR"
 
+  # The selection is the user's intent — keep it on even if the tool is not
+  # on PATH in this exact shell yet. dev skips missing commands at runtime.
   local oc="$SELECT_OPENCODE" cl="$SELECT_CLAUDE" cx="$SELECT_CODEX"
-  [ "$oc" = "on" ] && ! has_command opencode && oc="off"
-  [ "$cl" = "on" ] && ! has_command claude && cl="off"
-  [ "$cx" = "on" ] && ! has_command codex && cx="off"
 
   if [ ! -f "$CONFIG_FILE" ]; then
     cat > "$CONFIG_FILE" <<CONFIG_EOF
@@ -472,15 +450,14 @@ verify_install() {
   VERIFY_OK=1
 
   check_row "dev" "dev"
-  check_row "dev-config" "dev-config"
   check_row "tmux" "tmux"
   check_row "python3" "python3"
   check_row "gum" "gum"
 
-  if python3 -c "import curses" >/dev/null 2>&1; then
-    printf "  ${C_GREEN}✓${RESET} %-16s ${C_MUTED}available${RESET}\n" "config editor"
+  if [ -f "$LIBEXEC_DIR/dev-config" ] && python3 -c "import curses" >/dev/null 2>&1; then
+    printf "  ${C_GREEN}✓${RESET} %-16s ${C_MUTED}%s${RESET}\n" "config editor" "$LIBEXEC_DIR/dev-config"
   else
-    printf "  ${C_DANGER}✗${RESET} %-16s ${C_DANGER}python3 curses missing${RESET}\n" "config editor"
+    printf "  ${C_DANGER}✗${RESET} %-16s ${C_DANGER}missing (file or python3 curses)${RESET}\n" "config editor"
     VERIFY_OK=0
   fi
 

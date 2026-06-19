@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+# Make sure tool install locations are visible regardless of how the shell
+# was started, so opencode / codex / claude are detected and launchable.
+export PATH="$HOME/.opencode/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
+
 DEFAULT_PROJECT_DIR="$HOME/projects"
 CONFIG_DIR="$HOME/.config/devctl"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -38,6 +42,36 @@ attach_or_switch() {
   else
     tmux attach -t "$SESSION"
   fi
+}
+
+style_session() {
+  # Window numbering starts at 1.
+  tmux set-option -t "$SESSION" base-index 1 >/dev/null 2>&1 || true
+  tmux set-window-option -t "$SESSION" pane-base-index 1 >/dev/null 2>&1 || true
+  tmux set-option -t "$SESSION" renumber-windows on >/dev/null 2>&1 || true
+
+  # Status bar: a clean accent badge with the project name on the left,
+  # styled window tabs, and window count + clock on the right.
+  tmux set-option -t "$SESSION" status on >/dev/null 2>&1 || true
+  tmux set-option -t "$SESSION" status-interval 5 >/dev/null 2>&1 || true
+  tmux set-option -t "$SESSION" status-justify left >/dev/null 2>&1 || true
+  tmux set-option -t "$SESSION" status-style "bg=colour236,fg=colour250" >/dev/null 2>&1 || true
+
+  tmux set-option -t "$SESSION" status-left \
+    "#[fg=colour236,bg=colour141,bold] ◆ ${PROJECT_NAME} #[fg=colour141,bg=colour236,nobold] " \
+    >/dev/null 2>&1 || true
+  tmux set-option -t "$SESSION" status-left-length 60 >/dev/null 2>&1 || true
+
+  tmux set-option -t "$SESSION" status-right \
+    "#[fg=colour244]#{session_windows} windows #[fg=colour236,bg=colour117,bold] %H:%M " \
+    >/dev/null 2>&1 || true
+  tmux set-option -t "$SESSION" status-right-length 40 >/dev/null 2>&1 || true
+
+  tmux set-window-option -t "$SESSION" window-status-separator "" >/dev/null 2>&1 || true
+  tmux set-window-option -t "$SESSION" window-status-format \
+    "#[fg=colour244] #I #[fg=colour250]#W " >/dev/null 2>&1 || true
+  tmux set-window-option -t "$SESSION" window-status-current-format \
+    "#[fg=colour236,bg=colour117,bold] #I #W " >/dev/null 2>&1 || true
 }
 
 create_windows() {
@@ -93,6 +127,7 @@ start_dev() {
   fi
 
   create_windows
+  style_session
   tmux select-window -t "$SESSION:1"
   attach_or_switch
 }
@@ -137,6 +172,24 @@ list_dev() {
   tmux list-sessions 2>/dev/null | grep '^dev-' || echo "no dev sessions"
 }
 
+run_config_editor() {
+  local self_dir editor
+  self_dir="$(cd "$(dirname "$0")" && pwd)"
+
+  for editor in \
+    "$self_dir/dev-config" \
+    "$self_dir/../lib/devctl/dev-config" \
+    "/usr/local/lib/devctl/dev-config"; do
+    if [ -f "$editor" ]; then
+      DEVCTL_CONFIG_FILE="$CONFIG_FILE" python3 "$editor"
+      return 0
+    fi
+  done
+
+  echo "config editor not found"
+  cat "$CONFIG_FILE"
+}
+
 case "$COMMAND" in
   start)
     start_dev
@@ -158,7 +211,7 @@ case "$COMMAND" in
     list_dev
     ;;
   config)
-    DEVCTL_CONFIG_FILE="$CONFIG_FILE" "$(dirname "$0")/dev-config"
+    run_config_editor
     ;;
   *)
     echo "Usage: dev [start|stop|restart|status|list|kill|config] [path|session-name]"
