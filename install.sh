@@ -5,7 +5,7 @@ set -e
 INSTALL_DIR="/usr/local/bin"
 LIBEXEC_DIR="/usr/local/lib/devctl"
 CONFIG_DIR="$HOME/.config/devctl"
-CONFIG_FILE="$CONFIG_DIR/config"
+CONFIG_FILE="$CONFIG_DIR/config.json"
 
 SELECT_OPENCODE="off"
 SELECT_CLAUDE="off"
@@ -38,7 +38,7 @@ case "${LANG:-}" in
     ;;
 esac
 
-LOG_DIR="$HOME/.config/devctl"
+LOG_DIR="$HOME/.config/devctl/logs"
 LOG_FILE="$LOG_DIR/install-$(date +%Y%m%d-%H%M%S).log"
 APT_Q="-qq"
 [ "$DEBUG" = "1" ] && APT_Q=""
@@ -554,41 +554,60 @@ BASHRC_EOF
   success "updated bash PATH ($bashrc)"
 }
 
-set_config_line() {
-  local window_name="$1" window_command="$2" status="$3"
-
-  if grep -q "^$window_name:" "$CONFIG_FILE"; then
-    sed -i "s/^$window_name:$window_command:.*$/$window_name:$window_command:$status/" "$CONFIG_FILE"
-    return 0
-  fi
-  echo "$window_name:$window_command:$status" >> "$CONFIG_FILE"
-}
-
 write_config() {
   step "Write config"
   echo
 
   mkdir -p "$CONFIG_DIR"
 
-  # The selection is the user's intent — keep it on even if the tool is not
-  # on PATH in this exact shell yet. dev skips missing commands at runtime.
-  local oc="$SELECT_OPENCODE" cl="$SELECT_CLAUDE" cx="$SELECT_CODEX"
+  # Only the tools that are installed/selected go into the config. Existing
+  # entries are preserved; newly selected tools are added (enabled). Nothing
+  # is written as "off".
+  local tools=()
+  [ "$SELECT_OPENCODE" = "on" ] && tools+=("opencode")
+  [ "$SELECT_CLAUDE" = "on" ] && tools+=("claude")
+  [ "$SELECT_CODEX" = "on" ] && tools+=("codex")
 
-  if [ ! -f "$CONFIG_FILE" ]; then
-    cat > "$CONFIG_FILE" <<CONFIG_EOF
-shell:shell:on
-opencode:opencode:$oc
-claude:claude:$cl
-codex:codex:$cx
-CONFIG_EOF
-    success "created $CONFIG_FILE"
-    return 0
-  fi
+  python3 - "$CONFIG_FILE" "${tools[@]}" <<'PY'
+import json, os, sys
 
-  info "updating existing $CONFIG_FILE"
-  set_config_line "opencode" "opencode" "$oc"
-  set_config_line "claude" "claude" "$cl"
-  set_config_line "codex" "codex" "$cx"
+path = sys.argv[1]
+tools = sys.argv[2:]
+legacy = os.path.join(os.path.dirname(path), "config")
+
+data = {"windows": []}
+if os.path.exists(path):
+    try:
+        data = json.load(open(path))
+    except Exception:
+        data = {"windows": []}
+elif os.path.exists(legacy):
+    wins = []
+    for line in open(legacy):
+        parts = line.strip().split(":", 2)
+        if len(parts) == 3:
+            wins.append({"name": parts[0], "command": parts[1], "enabled": parts[2] == "on"})
+    data = {"windows": wins}
+
+wins = data.setdefault("windows", [])
+names = {w.get("name") for w in wins}
+
+if "shell" not in names:
+    wins.insert(0, {"name": "shell", "command": "shell", "enabled": True})
+
+for t in tools:
+    found = next((w for w in wins if w.get("name") == t), None)
+    if found:
+        found["enabled"] = True
+    else:
+        wins.append({"name": t, "command": t, "enabled": True})
+
+with open(path, "w") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+PY
+
+  success "wrote $CONFIG_FILE"
 }
 
 # -----------------------------------------------------------------------------
@@ -628,7 +647,7 @@ verify_install() {
   rule 48
 
   local i=1
-  while IFS=":" read -r window_name window_command enabled; do
+  while IFS=$'\t' read -r window_name window_command enabled; do
     [ -z "$window_name" ] && continue
     if [ "$enabled" = "on" ]; then
       printf "  ${C_MUTED}%-2s${RESET}  ${C_TEXT}%-14s${RESET} ${C_SKY}%-14s${RESET} ${C_GREEN}● ON${RESET}\n" \
@@ -638,7 +657,16 @@ verify_install() {
         "$i" "$window_name" "$window_command"
     fi
     i=$((i + 1))
-  done < "$CONFIG_FILE"
+  done < <(python3 - "$CONFIG_FILE" <<'PY'
+import json, sys
+try:
+    wins = json.load(open(sys.argv[1])).get("windows", [])
+except Exception:
+    wins = []
+for w in wins:
+    print(f"{w.get('name','')}\t{w.get('command','')}\t{'on' if w.get('enabled') else 'off'}")
+PY
+)
 
   echo
   if [ "$VERIFY_OK" -ne 1 ]; then

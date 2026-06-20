@@ -21,7 +21,7 @@ esac
 
 DEFAULT_PROJECT_DIR="$HOME/projects"
 CONFIG_DIR="$HOME/.config/devctl"
-CONFIG_FILE="$CONFIG_DIR/config"
+CONFIG_FILE="$CONFIG_DIR/config.json"
 COMMAND="${1:-start}"
 PROJECT_DIR="${2:-$PWD}"
 
@@ -38,14 +38,46 @@ DISPLAY_DIR="${PROJECT_DIR/#$HOME/~}"
 mkdir -p "$CONFIG_DIR"
 
 create_default_config() {
-  if [ ! -f "$CONFIG_FILE" ]; then
-    cat > "$CONFIG_FILE" <<'CONFIG_EOF'
-shell:shell:on
-opencode:opencode:on
-claude:claude:on
-codex:codex:on
-CONFIG_EOF
-  fi
+  [ -f "$CONFIG_FILE" ] && return 0
+
+  # Create config.json on first run: migrate a legacy colon "config" file if
+  # present, otherwise default to shell plus whichever tools are installed.
+  python3 - "$CONFIG_FILE" <<'PY'
+import json, os, sys, shutil
+
+path = sys.argv[1]
+legacy = os.path.join(os.path.dirname(path), "config")
+
+if os.path.exists(legacy):
+    wins = []
+    for line in open(legacy):
+        parts = line.strip().split(":", 2)
+        if len(parts) == 3:
+            wins.append({"name": parts[0], "command": parts[1], "enabled": parts[2] == "on"})
+else:
+    wins = [{"name": "shell", "command": "shell", "enabled": True}]
+    for t in ("opencode", "claude", "codex"):
+        if shutil.which(t):
+            wins.append({"name": t, "command": t, "enabled": True})
+
+with open(path, "w") as f:
+    json.dump({"windows": wins}, f, indent=2)
+    f.write("\n")
+PY
+}
+
+read_windows() {
+  # Emit "name<TAB>command" for each enabled window.
+  python3 - "$CONFIG_FILE" <<'PY'
+import json, sys
+try:
+    wins = json.load(open(sys.argv[1])).get("windows", [])
+except Exception:
+    wins = []
+for w in wins:
+    if w.get("enabled"):
+        print(f"{w.get('name','')}\t{w.get('command','')}")
+PY
 }
 
 command_exists() {
@@ -103,12 +135,8 @@ create_windows() {
 
   # Window numbering / renumbering is configured per-session in style_session
   # (which also runs move-window -r), so it is not set globally here.
-  while IFS=":" read -r window_name window_command enabled; do
-    if [ -z "$window_name" ] || [ -z "$window_command" ] || [ -z "$enabled" ]; then
-      continue
-    fi
-
-    if [ "$enabled" != "on" ]; then
+  while IFS=$'\t' read -r window_name window_command; do
+    if [ -z "$window_name" ] || [ -z "$window_command" ]; then
       continue
     fi
 
@@ -132,7 +160,7 @@ create_windows() {
     if [ "$window_command" != "shell" ]; then
       tmux send-keys -t "$SESSION:$window_name" "$window_command" C-m
     fi
-  done < "$CONFIG_FILE"
+  done < <(read_windows)
 
   if [ "$first_window_created" = "false" ]; then
     tmux new-session -d -s "$SESSION" -c "$PROJECT_DIR" -n shell

@@ -89,39 +89,38 @@ until you confirm.
 
 ## Config
 
-Config file location:
+Config file location (JSON):
 
-    ~/.config/devctl/config
+    ~/.config/devctl/config.json
 
-Default config:
+Only the tools you install/select are written to the config — there are no
+"off" entries for tools you don't have. As you install more tools, they are
+added. The installer migrates an older colon-format `config` file to JSON
+automatically.
 
-    shell:shell:on
-    opencode:opencode:on
-    claude:claude:on
-    codex:codex:on
+Example config:
 
-Format:
+    {
+      "windows": [
+        { "name": "shell",    "command": "shell",    "enabled": true },
+        { "name": "opencode", "command": "opencode", "enabled": true }
+      ]
+    }
 
-    window_name:command:on/off
+Each entry: `name` (window title), `command` (run on start; `shell` means a
+plain shell), `enabled` (true/false). Window order is the array order. Add
+another tool by appending an entry, e.g.:
 
-Examples:
+    { "name": "lazygit", "command": "lazygit", "enabled": true }
 
-Disable codex:
+Easiest is to edit it interactively with `dev config`. If a command does not
+exist, devctl skips that window automatically.
 
-    codex:codex:off
+## Logs
 
-Change window order by changing line order:
+Install logs are written under:
 
-    shell:shell:on
-    claude:claude:on
-    opencode:opencode:on
-    codex:codex:on
-
-Add another tool:
-
-    lazygit:lazygit:on
-
-If a command does not exist, devctl skips that window automatically.
+    ~/.config/devctl/logs/
 
 ## Project-based sessions
 
