@@ -132,13 +132,14 @@ style_session() {
       "#[fg=colour236,bg=colour117,bold] #I #W " >/dev/null 2>&1 || true
   done
 
-  # Ctrl+B then F = freeze + detach (intentional); reattach auto-thaws.
+  # Ctrl+B then Ctrl+F = freeze + detach (intentional); reattach auto-thaws.
+  # C-f avoids clashing with the default prefix 'f' (find-window).
   # Normal Ctrl+B D and dropped connections keep the session running.
   local dev_bin
   dev_bin="$(command -v dev 2>/dev/null)"
   [ -z "$dev_bin" ] && dev_bin="$(cd "$(dirname "$0")" && pwd)/dev"
 
-  tmux bind-key F run-shell -b "$dev_bin freeze-detach #{session_name}" >/dev/null 2>&1 || true
+  tmux bind-key C-f run-shell -b "$dev_bin freeze-detach #{session_name}" >/dev/null 2>&1 || true
   tmux set-hook -t "$SESSION" client-attached \
     "run-shell -b '$dev_bin thaw #{session_name}'" >/dev/null 2>&1 || true
 }
@@ -413,7 +414,7 @@ case "$COMMAND" in
     echo "       dev kill <session|fragment>"
     echo "       dev freeze [session|fragment|all]   pause a session (SIGSTOP)"
     echo "       dev thaw   [session|fragment|all]   resume a session (SIGCONT)"
-    echo "       (in tmux: Ctrl+B then F = freeze + detach; reattach resumes)"
+    echo "       (in tmux: Ctrl+B then Ctrl+F = freeze + detach; reattach resumes)"
     exit 1
     ;;
 esac
