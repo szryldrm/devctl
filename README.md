@@ -10,20 +10,15 @@ This is useful for remote development from a tablet or another SSH client. If th
 
 One-line install (clones the repo and runs the installer):
 
-    curl -fsSL <host>/bootstrap.sh | bash
+    curl -fsSL https://raw.githubusercontent.com/szryldrm/devctl/main/bootstrap.sh | bash
 
 With options (e.g. show command output):
 
-    curl -fsSL <host>/bootstrap.sh | bash -s -- --debug
-
-`<host>` is wherever you serve `bootstrap.sh` (your git server's raw file URL,
-a GitHub raw URL, or any static host). Override the source repo if needed:
-
-    curl -fsSL <host>/bootstrap.sh | DEVCTL_REPO=git@git.home.lan:sezeryildirim/devctl.git DEVCTL_BRANCH=main bash
+    curl -fsSL https://raw.githubusercontent.com/szryldrm/devctl/main/bootstrap.sh | bash -s -- --debug
 
 Or clone and run manually:
 
-    git clone git@git.home.lan:sezeryildirim/devctl.git
+    git clone https://github.com/szryldrm/devctl.git
     cd devctl
     ./install.sh
 

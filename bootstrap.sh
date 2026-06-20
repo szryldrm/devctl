@@ -3,16 +3,16 @@
 # One-line installer for devctl. Clones the repository to a temporary
 # directory and runs ./install.sh from there.
 #
-#   curl -fsSL <url>/bootstrap.sh | bash
-#   curl -fsSL <url>/bootstrap.sh | bash -s -- --debug
+#   curl -fsSL https://raw.githubusercontent.com/szryldrm/devctl/main/bootstrap.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/szryldrm/devctl/main/bootstrap.sh | bash -s -- --debug
 #
 # Override the source with env vars:
-#   DEVCTL_REPO=git@git.home.lan:sezeryildirim/devctl.git
+#   DEVCTL_REPO=https://github.com/szryldrm/devctl.git
 #   DEVCTL_BRANCH=main
 
 set -e
 
-REPO="${DEVCTL_REPO:-git@git.home.lan:sezeryildirim/devctl.git}"
+REPO="${DEVCTL_REPO:-https://github.com/szryldrm/devctl.git}"
 BRANCH="${DEVCTL_BRANCH:-main}"
 
 RED="\033[31m"; GREEN="\033[32m"; BLUE="\033[34m"; RESET="\033[0m"
