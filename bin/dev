@@ -101,10 +101,8 @@ style_session() {
 create_windows() {
   local first_window_created="false"
 
-  tmux set-option -g base-index 1 >/dev/null 2>&1 || true
-  tmux set-window-option -g pane-base-index 1 >/dev/null 2>&1 || true
-  tmux set-option -g renumber-windows on >/dev/null 2>&1 || true
-
+  # Window numbering / renumbering is configured per-session in style_session
+  # (which also runs move-window -r), so it is not set globally here.
   while IFS=":" read -r window_name window_command enabled; do
     if [ -z "$window_name" ] || [ -z "$window_command" ] || [ -z "$enabled" ]; then
       continue

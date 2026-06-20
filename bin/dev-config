@@ -221,8 +221,6 @@ def draw_table(stdscr, items, selected, top, height, width):
         else:
             put(stdscr, y, x, " OFF ", attr("off"))
 
-    return rows_top, visible, offset
-
 def draw_footer(stdscr, height, width, message):
     msg_y = height - 3
     if message:

@@ -70,7 +70,6 @@ C_DANGER="\033[38;5;${DANGER}m"
 C_MUTED="\033[38;5;${MUTED}m"
 C_TEXT="\033[38;5;${TEXT}m"
 BOLD="\033[1m"
-DIM="\033[2m"
 RESET="\033[0m"
 
 # --- plain helpers (work before gum is installed) ----------------------------
@@ -301,14 +300,14 @@ ensure_required_dependencies() {
     echo
     prime_sudo
     spin "Installing dependencies" \
-      "$SUDO env DEBIAN_FRONTEND=noninteractive apt-get update -qq && $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ${missing_packages[*]}"
+      "$SUDO env DEBIAN_FRONTEND=noninteractive apt-get update $APT_Q && $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y $APT_Q ${missing_packages[*]}"
     refresh_path
   fi
 
   # The config editor needs python3 + the curses stdlib module.
   if has_command python3 && ! python3 -c "import curses" >/dev/null 2>&1; then
     spin "Installing python3 (curses)" \
-      "$SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3"
+      "$SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y $APT_Q python3"
   fi
 
   local still_missing=()
@@ -328,6 +327,15 @@ ensure_required_dependencies() {
 # -----------------------------------------------------------------------------
 # Optional AI tools
 # -----------------------------------------------------------------------------
+
+tool_badge() {
+  local name="$1" state="$2"
+  if [ "$state" = "on" ]; then
+    printf "  ${C_GREEN}●${RESET} %-10s ${C_GREEN}will install${RESET}\n" "$name"
+  else
+    printf "  ${C_MUTED}○ %-10s skipped${RESET}\n" "$name"
+  fi
+}
 
 select_tools() {
   step "Select tools"
@@ -381,15 +389,6 @@ select_tools() {
   tool_present codex && SELECT_CODEX="on"; [ "$PICK_CODEX" = "on" ] && SELECT_CODEX="on"
 
   return 0
-}
-
-tool_badge() {
-  local name="$1" state="$2"
-  if [ "$state" = "on" ]; then
-    printf "  ${C_GREEN}●${RESET} %-10s ${C_GREEN}will install${RESET}\n" "$name"
-  else
-    printf "  ${C_MUTED}○ %-10s skipped${RESET}\n" "$name"
-  fi
 }
 
 # Run a command behind a spinner. In --debug the output is shown (and logged)
