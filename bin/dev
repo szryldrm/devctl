@@ -5,9 +5,18 @@
 export PATH="$HOME/.opencode/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
 
 # Ensure a UTF-8 locale so tmux and the tools render Unicode correctly.
+# Only switch to a locale that actually exists, to avoid setlocale warnings.
 case "${LANG:-}" in
-  *UTF-8|*utf8) ;;
-  *) export LANG=en_US.UTF-8 ;;
+  *[Uu][Tt][Ff]*8*) ;;
+  *)
+    for _loc in C.UTF-8 C.utf8 en_US.UTF-8 en_US.utf8; do
+      if locale -a 2>/dev/null | grep -qix "$_loc"; then
+        export LANG="$_loc"
+        break
+      fi
+    done
+    unset _loc
+    ;;
 esac
 
 DEFAULT_PROJECT_DIR="$HOME/projects"

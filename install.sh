@@ -18,11 +18,17 @@ for _arg in "$@"; do
   [ "$_arg" = "--debug" ] && DEBUG=1
 done
 
-# Use a UTF-8 locale immediately so the installer UI (and the tools it opens)
-# render box-drawing glyphs correctly. A persistent locale is generated later.
+# Use a UTF-8 locale immediately so the installer UI renders correctly. Only
+# switch to one that already exists (C.UTF-8 ships with glibc) to avoid
+# setlocale warnings; a persistent locale is ensured later.
 case "${LANG:-}" in
-  *UTF-8|*utf8|*UTF8) ;;
-  *) export LANG=C.UTF-8 ;;
+  *[Uu][Tt][Ff]*8*) ;;
+  *)
+    for _loc in C.UTF-8 C.utf8 en_US.UTF-8 en_US.utf8; do
+      if locale -a 2>/dev/null | grep -qix "$_loc"; then export LANG="$_loc"; break; fi
+    done
+    unset _loc
+    ;;
 esac
 
 LOG_DIR="$HOME/.config/devctl"
@@ -213,11 +219,22 @@ ensure_gum() {
 # A UTF-8 locale is required so tmux/opencode/claude render box-drawing
 # glyphs instead of broken boxes. Generate en_US.UTF-8 and switch to it.
 ensure_locale() {
-  if locale 2>/dev/null | grep -qiE 'UTF-8'; then
-    export LANG="${LANG:-en_US.UTF-8}"
-    return 0
-  fi
+  # Already on a UTF-8 locale (e.g. set by the top-level block)? Done.
+  case "${LANG:-}" in
+    *[Uu][Tt][Ff]*8*) return 0 ;;
+  esac
 
+  # Prefer an existing UTF-8 locale — C.UTF-8 ships with glibc and needs no
+  # generation, which avoids "cannot change locale" warnings.
+  local loc
+  for loc in C.UTF-8 C.utf8 en_US.UTF-8 en_US.utf8; do
+    if locale -a 2>/dev/null | grep -qix "$loc"; then
+      export LANG="$loc"
+      return 0
+    fi
+  done
+
+  # Nothing available — generate en_US.UTF-8.
   prime_sudo
   spin "Configuring UTF-8 locale" \
     "$SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y $APT_Q locales; \
@@ -226,7 +243,6 @@ ensure_locale() {
      $SUDO update-locale LANG=en_US.UTF-8"
 
   export LANG=en_US.UTF-8
-  export LC_ALL=en_US.UTF-8
 }
 
 ensure_required_dependencies() {
@@ -446,6 +462,10 @@ append_shell_path_if_needed() {
   local bashrc="$HOME/.bashrc"
   touch "$bashrc"
 
+  # Migrate: older installs hardcoded a locale that may not exist on the
+  # system, which caused "cannot change locale" warnings. Drop that line.
+  sed -i '/^[[:space:]]*\*) export LANG=en_US\.UTF-8 ;;[[:space:]]*$/d' "$bashrc" 2>/dev/null || true
+
   if grep -q 'devctl path config' "$bashrc"; then
     success "bash PATH already configured"
     return 0
@@ -470,8 +490,13 @@ unset -f path_add
 
 # devctl: ensure a UTF-8 locale for correct glyph rendering
 case "${LANG:-}" in
-  *UTF-8|*utf8) ;;
-  *) export LANG=en_US.UTF-8 ;;
+  *[Uu][Tt][Ff]*8*) ;;
+  *)
+    for _loc in C.UTF-8 C.utf8 en_US.UTF-8 en_US.utf8; do
+      if locale -a 2>/dev/null | grep -qix "$_loc"; then export LANG="$_loc"; break; fi
+    done
+    unset _loc
+    ;;
 esac
 BASHRC_EOF
   success "updated bash PATH ($bashrc)"
