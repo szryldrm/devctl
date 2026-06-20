@@ -11,6 +11,27 @@ SELECT_OPENCODE="off"
 SELECT_CLAUDE="off"
 SELECT_CODEX="off"
 
+# --debug shows the underlying command output instead of hiding it behind
+# spinners. Everything is logged either way.
+DEBUG=0
+for _arg in "$@"; do
+  [ "$_arg" = "--debug" ] && DEBUG=1
+done
+
+# Use a UTF-8 locale immediately so the installer UI (and the tools it opens)
+# render box-drawing glyphs correctly. A persistent locale is generated later.
+case "${LANG:-}" in
+  *UTF-8|*utf8|*UTF8) ;;
+  *) export LANG=C.UTF-8 ;;
+esac
+
+LOG_DIR="$HOME/.config/devctl"
+LOG_FILE="$LOG_DIR/install-$(date +%Y%m%d-%H%M%S).log"
+APT_Q="-qq"
+[ "$DEBUG" = "1" ] && APT_Q=""
+mkdir -p "$LOG_DIR"
+: > "$LOG_FILE"
+
 # Commands devctl needs at runtime, mapped to apt packages in apt_pkg_for().
 # gum is handled separately because it may need the charm apt repo.
 REQUIRED_COMMANDS="tmux git curl ssh python3 realpath sha1sum"
@@ -77,6 +98,19 @@ run_root() {
 SUDO=""
 is_root || SUDO="sudo"
 
+log() { printf '%s\n' "$*" >>"$LOG_FILE" 2>/dev/null || true; }
+
+# Execute a shell command string. Output always goes to the log; it is shown
+# on the terminal only in --debug mode.
+run() {
+  log "+ $1"
+  if [ "$DEBUG" = "1" ]; then
+    bash -c "$1" 2>&1 | tee -a "$LOG_FILE"
+  else
+    bash -c "$1" >>"$LOG_FILE" 2>&1
+  fi
+}
+
 apt_pkg_for() {
   case "$1" in
     ssh) echo "openssh-client" ;;
@@ -108,16 +142,16 @@ apt_update_once() {
   [ "${APT_UPDATED:-}" = "1" ] && return 0
   require_apt
   prime_sudo
-  $SUDO env DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null 2>&1 || true
+  run "$SUDO env DEBIAN_FRONTEND=noninteractive apt-get update $APT_Q" || true
   APT_UPDATED=1
 }
 
-# Quiet, non-interactive package install — produces no terminal output.
+# Quiet, non-interactive package install — logged, hidden unless --debug.
 apt_install_now() {
   require_apt "$@"
   prime_sudo
   apt_update_once
-  $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@" >/dev/null 2>&1 || true
+  run "$SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y $APT_Q $*" || true
 }
 
 # -----------------------------------------------------------------------------
@@ -163,11 +197,9 @@ ensure_gum() {
 
   # charm apt repository fallback
   apt_install_now curl ca-certificates gnupg
-  $SUDO mkdir -p /etc/apt/keyrings >/dev/null 2>&1 || true
-  curl -fsSL https://repo.charm.sh/apt/gpg.key 2>/dev/null |
-    $SUDO gpg --dearmor -o /etc/apt/keyrings/charm.gpg >/dev/null 2>&1 || true
-  echo "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" |
-    $SUDO tee /etc/apt/sources.list.d/charm.list >/dev/null 2>&1 || true
+  run "$SUDO mkdir -p /etc/apt/keyrings" || true
+  run "curl -fsSL https://repo.charm.sh/apt/gpg.key | $SUDO gpg --dearmor -o /etc/apt/keyrings/charm.gpg" || true
+  run "echo 'deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *' | $SUDO tee /etc/apt/sources.list.d/charm.list" || true
 
   APT_UPDATED=""
   apt_install_now gum
@@ -176,6 +208,25 @@ ensure_gum() {
     error "Failed to install gum (required for the installer UI)"
     exit 1
   fi
+}
+
+# A UTF-8 locale is required so tmux/opencode/claude render box-drawing
+# glyphs instead of broken boxes. Generate en_US.UTF-8 and switch to it.
+ensure_locale() {
+  if locale 2>/dev/null | grep -qiE 'UTF-8'; then
+    export LANG="${LANG:-en_US.UTF-8}"
+    return 0
+  fi
+
+  prime_sudo
+  spin "Configuring UTF-8 locale" \
+    "$SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y $APT_Q locales; \
+     [ -f /etc/locale.gen ] && $SUDO sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen; \
+     $SUDO locale-gen en_US.UTF-8; \
+     $SUDO update-locale LANG=en_US.UTF-8"
+
+  export LANG=en_US.UTF-8
+  export LC_ALL=en_US.UTF-8
 }
 
 ensure_required_dependencies() {
@@ -274,20 +325,28 @@ tool_badge() {
   fi
 }
 
-# Run a command behind a spinner. gum hides the command's own output and shows
-# only the loading bar with our title — so we must NOT redirect gum's output.
+# Run a command behind a spinner. In --debug the output is shown (and logged)
+# instead of a spinner. Otherwise gum shows only the loading bar and the
+# command's output is appended to the log file.
 spin() {
   local title="$1" cmd="$2"
+  log "=== $title ==="
+
+  if [ "$DEBUG" = "1" ]; then
+    info "$title"
+    run "$cmd" || true
+    return 0
+  fi
 
   if has_command gum; then
     gum spin --spinner dot \
       --spinner.foreground "$ACCENT" \
       --title.foreground "$TEXT" \
       --title "$title" \
-      -- bash -c "$cmd" || true
+      -- bash -c "{ $cmd ; } >> '$LOG_FILE' 2>&1" || true
   else
     info "$title"
-    bash -c "$cmd" >/dev/null 2>&1 || true
+    bash -c "{ $cmd ; } >> '$LOG_FILE' 2>&1" || true
   fi
 }
 
@@ -298,7 +357,7 @@ install_node_if_missing() {
 
   prime_sudo
   spin "Installing Node.js 22" \
-    "curl -fsSL https://deb.nodesource.com/setup_22.x | $SUDO bash - && $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs"
+    "curl -fsSL https://deb.nodesource.com/setup_22.x | $SUDO bash - && $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y $APT_Q nodejs"
   refresh_path
 }
 
@@ -408,6 +467,12 @@ path_add "/usr/local/bin"
 export PATH
 
 unset -f path_add
+
+# devctl: ensure a UTF-8 locale for correct glyph rendering
+case "${LANG:-}" in
+  *UTF-8|*utf8) ;;
+  *) export LANG=en_US.UTF-8 ;;
+esac
 BASHRC_EOF
   success "updated bash PATH ($bashrc)"
 }
@@ -541,6 +606,11 @@ print_summary() {
     "dev start"
 
   echo
+  echo -e "  ${C_ACCENT}${BOLD}LOG${RESET}"
+  echo -e "  ${C_MUTED}Install log:${RESET} ${C_TEXT}${LOG_FILE}${RESET}"
+  echo -e "  ${C_MUTED}Re-run with ${C_TEXT}./install.sh --debug${C_MUTED} to see command output live${RESET}"
+
+  echo
   echo -e "  ${C_MUTED}Open a new terminal or run: ${C_TEXT}source ~/.bashrc${RESET}"
   echo
 }
@@ -554,8 +624,12 @@ if [ ! -f "./bin/dev" ] || [ ! -f "./bin/dev-config" ]; then
   exit 1
 fi
 
+log "devctl install started $(date)"
+log "debug=$DEBUG"
+
 refresh_path
 ensure_gum
+ensure_locale
 banner
 ensure_required_dependencies
 

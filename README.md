@@ -14,7 +14,11 @@ Run:
     cd devctl
     ./install.sh
 
-The installer checks required dependencies and optionally installs supported tools if they are missing.
+The installer checks required dependencies and optionally installs supported tools if they are missing. It configures a UTF-8 locale (so tmux and the tools render correctly), installs everything quietly behind a loading bar, and writes a log to `~/.config/devctl/install-<timestamp>.log`. The log location is printed when the install finishes.
+
+To see the underlying command output live instead of the loading bar:
+
+    ./install.sh --debug
 
 ## Uninstall
 
@@ -145,6 +149,7 @@ Required:
 - sha1sum
 - curl
 - python3 (config editor)
+- locales / a UTF-8 locale (configured automatically by the installer)
 
 Optional:
 
