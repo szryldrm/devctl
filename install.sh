@@ -11,6 +11,13 @@ SELECT_OPENCODE="off"
 SELECT_CLAUDE="off"
 SELECT_CODEX="off"
 
+# PICK_* = tools the user chose to install (only ever set for tools that are
+# not already on the system). SELECT_* = final config state (on if installed
+# or picked).
+PICK_OPENCODE="off"
+PICK_CLAUDE="off"
+PICK_CODEX="off"
+
 # --debug shows the underlying command output instead of hiding it behind
 # spinners. Everything is logged either way.
 DEBUG=0
@@ -306,36 +313,62 @@ ensure_required_dependencies() {
 
 select_tools() {
   step "Select tools"
-
   echo
-  local selected
-  selected="$(gum choose --no-limit \
-    --cursor "❯ " \
-    --cursor-prefix "○ " \
-    --selected-prefix "● " \
-    --unselected-prefix "○ " \
-    --cursor.foreground "$ACCENT" \
-    --selected.foreground "$GREEN" \
-    --height 8 \
-    --header "  Space to select · Enter to confirm" \
-    "opencode" \
-    "claude" \
-    "codex")"
 
-  echo "$selected" | grep -qx "opencode" && SELECT_OPENCODE="on"
-  echo "$selected" | grep -qx "claude" && SELECT_CLAUDE="on"
-  echo "$selected" | grep -qx "codex" && SELECT_CODEX="on"
+  # Split into already-installed (kept, never prompted/installed) vs available.
+  local installed=() available=() t
+  for t in opencode claude codex; do
+    if has_command "$t"; then installed+=("$t"); else available+=("$t"); fi
+  done
 
-  echo
-  tool_badge "opencode" "$SELECT_OPENCODE"
-  tool_badge "claude" "$SELECT_CLAUDE"
-  tool_badge "codex" "$SELECT_CODEX"
+  if [ "${#installed[@]}" -gt 0 ]; then
+    for t in "${installed[@]}"; do
+      printf "  ${C_GREEN}✓${RESET} %-10s ${C_MUTED}already installed${RESET}\n" "$t"
+    done
+    echo
+  fi
+
+  if [ "${#available[@]}" -eq 0 ]; then
+    info "All supported tools are already installed — nothing to choose"
+  else
+    local selected
+    selected="$(gum choose --no-limit \
+      --cursor "❯ " \
+      --cursor-prefix "○ " \
+      --selected-prefix "● " \
+      --unselected-prefix "○ " \
+      --cursor.foreground "$ACCENT" \
+      --selected.foreground "$GREEN" \
+      --height 8 \
+      --header "  Space to select · Enter to confirm" \
+      "${available[@]}")"
+
+    echo "$selected" | grep -qx "opencode" && PICK_OPENCODE="on"
+    echo "$selected" | grep -qx "claude" && PICK_CLAUDE="on"
+    echo "$selected" | grep -qx "codex" && PICK_CODEX="on"
+
+    echo
+    for t in "${available[@]}"; do
+      case "$t" in
+        opencode) tool_badge opencode "$PICK_OPENCODE" ;;
+        claude)   tool_badge claude "$PICK_CLAUDE" ;;
+        codex)    tool_badge codex "$PICK_CODEX" ;;
+      esac
+    done
+  fi
+
+  # Final config state: enabled if already installed OR picked to install.
+  has_command opencode && SELECT_OPENCODE="on"; [ "$PICK_OPENCODE" = "on" ] && SELECT_OPENCODE="on"
+  has_command claude && SELECT_CLAUDE="on"; [ "$PICK_CLAUDE" = "on" ] && SELECT_CLAUDE="on"
+  has_command codex && SELECT_CODEX="on"; [ "$PICK_CODEX" = "on" ] && SELECT_CODEX="on"
+
+  return 0
 }
 
 tool_badge() {
   local name="$1" state="$2"
   if [ "$state" = "on" ]; then
-    printf "  ${C_GREEN}●${RESET} %-10s ${C_GREEN}selected${RESET}\n" "$name"
+    printf "  ${C_GREEN}●${RESET} %-10s ${C_GREEN}will install${RESET}\n" "$name"
   else
     printf "  ${C_MUTED}○ %-10s skipped${RESET}\n" "$name"
   fi
@@ -423,22 +456,24 @@ install_codex_if_missing() {
 install_selected_tools() {
   step "Install tools"
 
-  if [ "$SELECT_OPENCODE$SELECT_CLAUDE$SELECT_CODEX" = "offoffoff" ]; then
+  if [ "$PICK_OPENCODE$PICK_CLAUDE$PICK_CODEX" = "offoffoff" ]; then
     echo
-    info "No tools selected — skipping"
+    info "Nothing new to install"
     return 0
   fi
 
   echo
   info "These tools will be installed:"
-  [ "$SELECT_OPENCODE" = "on" ] && echo -e "    ${C_ACCENT}•${RESET} ${C_TEXT}opencode${RESET}"
-  [ "$SELECT_CLAUDE" = "on" ] && echo -e "    ${C_ACCENT}•${RESET} ${C_TEXT}claude  ${C_MUTED}(+ Node.js)${RESET}"
-  [ "$SELECT_CODEX" = "on" ] && echo -e "    ${C_ACCENT}•${RESET} ${C_TEXT}codex${RESET}"
+  [ "$PICK_OPENCODE" = "on" ] && echo -e "    ${C_ACCENT}•${RESET} ${C_TEXT}opencode${RESET}"
+  [ "$PICK_CLAUDE" = "on" ] && echo -e "    ${C_ACCENT}•${RESET} ${C_TEXT}claude  ${C_MUTED}(+ Node.js)${RESET}"
+  [ "$PICK_CODEX" = "on" ] && echo -e "    ${C_ACCENT}•${RESET} ${C_TEXT}codex${RESET}"
   echo
 
-  [ "$SELECT_OPENCODE" = "on" ] && { install_opencode_if_missing || true; }
-  [ "$SELECT_CLAUDE" = "on" ] && { install_claude_if_missing || true; }
-  [ "$SELECT_CODEX" = "on" ] && { install_codex_if_missing || true; }
+  [ "$PICK_OPENCODE" = "on" ] && { install_opencode_if_missing || true; }
+  [ "$PICK_CLAUDE" = "on" ] && { install_claude_if_missing || true; }
+  [ "$PICK_CODEX" = "on" ] && { install_codex_if_missing || true; }
+
+  return 0
 }
 
 # -----------------------------------------------------------------------------
