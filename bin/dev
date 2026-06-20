@@ -4,6 +4,12 @@
 # was started, so opencode / codex / claude are detected and launchable.
 export PATH="$HOME/.opencode/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
 
+# Ensure a UTF-8 locale so tmux and the tools render Unicode correctly.
+case "${LANG:-}" in
+  *UTF-8|*utf8) ;;
+  *) export LANG=en_US.UTF-8 ;;
+esac
+
 DEFAULT_PROJECT_DIR="$HOME/projects"
 CONFIG_DIR="$HOME/.config/devctl"
 CONFIG_FILE="$CONFIG_DIR/config"
