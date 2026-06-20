@@ -60,9 +60,24 @@ List all development sessions:
 
     dev list
 
-Kill a specific development session:
+Kill a development session (full name or a fragment such as the hash):
 
-    dev kill <session-name>
+    dev kill <session-name|fragment>
+
+Freeze / thaw sessions to stop them eating CPU (and RAM, with swap):
+
+    dev freeze              # freeze the current folder's session
+    dev freeze <fragment>   # freeze a specific session
+    dev freeze all          # freeze every session (skips the attached one)
+    dev thaw <fragment|all> # resume
+
+`freeze` sends SIGSTOP to every process in the session: it pauses exactly where
+it was and uses no CPU; `thaw` (SIGCONT) resumes instantly, right where it left
+off — nothing restarts. Physical RAM is reclaimed only if the host has swap or
+zram (the kernel pages the stopped processes out under memory pressure); without
+swap a frozen session keeps its RAM but burns no CPU. `dev list` marks frozen
+sessions. You cannot freeze the session you are currently attached to — detach
+first (Ctrl+B then D).
 
 Open the interactive config editor:
 
