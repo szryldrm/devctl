@@ -58,17 +58,17 @@ Open the interactive config editor:
 
 Editor keys:
 
-    ↑/↓ or k/j       select window
+    ↑ / ↓            select window
+    k / j            reorder: move selected window up / down
     Space / Tab      toggle on/off
     Enter / e        edit name and command
     a                add window
     d                delete window
-    K / Shift+↑      reorder: move selected window up
-    J / Shift+↓      reorder: move selected window down
     q / Esc          exit
 
-On exit, if you made changes, the editor asks whether to save
-(y save / n discard / c cancel). Nothing is written until you confirm.
+On exit, if you made changes, the editor shows a Save / Discard / Cancel
+dialog. Use ←/→ and Enter (or the y / n / c shortcuts). Nothing is written
+until you confirm.
 
 ## Config
 

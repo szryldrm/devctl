@@ -228,11 +228,11 @@ def draw_footer(stdscr, height, width, message):
 
     hints = [
         ("↑↓", "select"),
+        ("j/k", "reorder"),
         ("space", "toggle"),
         ("⏎", "edit"),
         ("a", "add"),
         ("d", "delete"),
-        ("J/K", "reorder"),
         ("q", "quit"),
     ]
 
@@ -378,44 +378,61 @@ def add_item(stdscr, items):
     return name
 
 def confirm_exit(stdscr):
-    h, w = stdscr.getmaxyx()
-    bw = min(52, max(38, w - 6))
-    bh = 7
-    by = max(0, (h - bh) // 2)
-    bx = max(0, (w - bw) // 2)
-
-    panel = attr("panel")
-    border = attr("panel_border", bold=True)
-
-    for r in range(bh):
-        put(stdscr, by + r, bx, " " * bw, panel)
-
-    put(stdscr, by, bx, "╭" + "─" * (bw - 2) + "╮", border)
-    put(stdscr, by + bh - 1, bx, "╰" + "─" * (bw - 2) + "╯", border)
-    for r in range(1, bh - 1):
-        put(stdscr, by + r, bx, "│", border)
-        put(stdscr, by + r, bx + bw - 1, "│", border)
-
-    title = "Save changes before exiting?"
-    put(stdscr, by + 2, bx + (bw - len(title)) // 2, title, attr("panel", bold=True))
-
-    y_lbl, n_lbl, c_lbl = " y save ", " n discard ", " c cancel "
-    total = len(y_lbl) + len(n_lbl) + len(c_lbl) + 4
-    ox = bx + (bw - total) // 2
-    put(stdscr, by + 4, ox, y_lbl, attr("on", bold=True))
-    put(stdscr, by + 4, ox + len(y_lbl) + 2, n_lbl, attr("off", bold=True))
-    put(stdscr, by + 4, ox + len(y_lbl) + len(n_lbl) + 4, c_lbl, attr("key", bold=True))
-
-    stdscr.noutrefresh()
-    curses.doupdate()
+    options = [("save", "Save"), ("discard", "Discard"), ("cancel", "Cancel")]
+    shortcuts = {ord("y"): "save", ord("Y"): "save",
+                 ord("n"): "discard", ord("N"): "discard",
+                 ord("c"): "cancel", ord("C"): "cancel"}
+    sel = 0
 
     while True:
+        h, w = stdscr.getmaxyx()
+        bw = min(56, max(42, w - 6))
+        bh = 8
+        by = max(0, (h - bh) // 2)
+        bx = max(0, (w - bw) // 2)
+
+        panel = attr("panel")
+        border = attr("panel_border", bold=True)
+
+        for r in range(bh):
+            put(stdscr, by + r, bx, " " * bw, panel)
+
+        put(stdscr, by, bx, "╭" + "─" * (bw - 2) + "╮", border)
+        put(stdscr, by + bh - 1, bx, "╰" + "─" * (bw - 2) + "╯", border)
+        for r in range(1, bh - 1):
+            put(stdscr, by + r, bx, "│", border)
+            put(stdscr, by + r, bx + bw - 1, "│", border)
+
+        title = "Save changes before exiting?"
+        put(stdscr, by + 2, bx + (bw - len(title)) // 2, title, attr("panel", bold=True))
+
+        labels = [f"  {label}  " for _, label in options]
+        gap = 2
+        total = sum(len(s) for s in labels) + gap * (len(labels) - 1)
+        x = bx + (bw - total) // 2
+        for i, label in enumerate(labels):
+            chosen = i == sel
+            a = attr("key", bold=True) if chosen else attr("off", bold=True)
+            put(stdscr, by + 4, x, label, a)
+            x += len(label) + gap
+
+        hint = "←/→ move · enter confirm · y / n / c"
+        put(stdscr, by + 6, bx + (bw - len(hint)) // 2, hint, attr("panel"))
+
+        stdscr.noutrefresh()
+        curses.doupdate()
+
         k = stdscr.getch()
-        if k in (ord("y"), ord("Y")):
-            return "save"
-        if k in (ord("n"), ord("N")):
-            return "discard"
-        if k in (ord("c"), ord("C"), 27):
+
+        if k in (curses.KEY_LEFT, curses.KEY_UP, ord("h")):
+            sel = (sel - 1) % len(options)
+        elif k in (curses.KEY_RIGHT, curses.KEY_DOWN, ord("l")):
+            sel = (sel + 1) % len(options)
+        elif k in (10, 13, curses.KEY_ENTER):
+            return options[sel][0]
+        elif k in shortcuts:
+            return shortcuts[k]
+        elif k == 27:
             return "cancel"
 
 # ---------------------------------------------------------------------------
@@ -433,7 +450,7 @@ def main(stdscr):
     items = load_items()
     saved = snapshot_of(items)
     selected = 0
-    message = ("↕ select · space toggle · changes saved on exit", "muted")
+    message = ("↑↓ select · j/k reorder · changes saved on exit", "muted")
 
     while True:
         if items and selected >= len(items):
@@ -459,11 +476,11 @@ def main(stdscr):
             message = ("changes not saved yet", "warn")
             continue
 
-        if key in (curses.KEY_UP, ord("k")):
+        if key == curses.KEY_UP:
             selected = max(0, selected - 1)
             continue
 
-        if key in (curses.KEY_DOWN, ord("j")):
+        if key == curses.KEY_DOWN:
             selected = min(len(items) - 1, selected + 1)
             continue
 
@@ -498,17 +515,17 @@ def main(stdscr):
             message = (f"deleted {removed['name']}", "danger")
             continue
 
-        # Reorder: Shift+Up/Down or uppercase K/J move the selected item.
-        if key in (curses.KEY_SR, ord("K")) and selected > 0:
+        # Reorder: k / j (also Shift+arrows or K / J) move the selected item.
+        if key in (ord("k"), ord("K"), curses.KEY_SR) and selected > 0:
             items[selected - 1], items[selected] = items[selected], items[selected - 1]
             selected -= 1
-            message = ("moved up", "toast")
+            message = (f"moved {items[selected]['name']} up", "toast")
             continue
 
-        if key in (curses.KEY_SF, ord("J")) and selected < len(items) - 1:
+        if key in (ord("j"), ord("J"), curses.KEY_SF) and selected < len(items) - 1:
             items[selected + 1], items[selected] = items[selected], items[selected + 1]
             selected += 1
-            message = ("moved down", "toast")
+            message = (f"moved {items[selected]['name']} down", "toast")
             continue
 
 if __name__ == "__main__":

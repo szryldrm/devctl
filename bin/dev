@@ -18,6 +18,7 @@ PROJECT_DIR="$(realpath "$PROJECT_DIR")"
 PROJECT_NAME="$(basename "$PROJECT_DIR")"
 PROJECT_HASH="$(echo "$PROJECT_DIR" | sha1sum | cut -c1-8)"
 SESSION="dev-${PROJECT_NAME}-${PROJECT_HASH}"
+DISPLAY_DIR="${PROJECT_DIR/#$HOME/~}"
 
 mkdir -p "$CONFIG_DIR"
 
@@ -45,13 +46,14 @@ attach_or_switch() {
 }
 
 style_session() {
-  # Window numbering starts at 1.
+  # Window numbering starts at 1 (renumber even if windows were made at 0).
   tmux set-option -t "$SESSION" base-index 1 >/dev/null 2>&1 || true
   tmux set-window-option -t "$SESSION" pane-base-index 1 >/dev/null 2>&1 || true
   tmux set-option -t "$SESSION" renumber-windows on >/dev/null 2>&1 || true
+  tmux move-window -r -t "$SESSION" >/dev/null 2>&1 || true
 
-  # Status bar: a clean accent badge with the project name on the left,
-  # styled window tabs, and window count + clock on the right.
+  # Status bar: accent project badge on the left; project folder, session
+  # name and clock on the right.
   tmux set-option -t "$SESSION" status on >/dev/null 2>&1 || true
   tmux set-option -t "$SESSION" status-interval 5 >/dev/null 2>&1 || true
   tmux set-option -t "$SESSION" status-justify left >/dev/null 2>&1 || true
@@ -60,18 +62,25 @@ style_session() {
   tmux set-option -t "$SESSION" status-left \
     "#[fg=colour236,bg=colour141,bold] ◆ ${PROJECT_NAME} #[fg=colour141,bg=colour236,nobold] " \
     >/dev/null 2>&1 || true
-  tmux set-option -t "$SESSION" status-left-length 60 >/dev/null 2>&1 || true
+  tmux set-option -t "$SESSION" status-left-length 40 >/dev/null 2>&1 || true
 
   tmux set-option -t "$SESSION" status-right \
-    "#[fg=colour244]#{session_windows} windows #[fg=colour236,bg=colour117,bold] %H:%M " \
+    "#[fg=colour117]${DISPLAY_DIR} #[fg=colour236,bg=colour244,bold] ${SESSION} #[fg=colour236,bg=colour117,bold] %H:%M " \
     >/dev/null 2>&1 || true
-  tmux set-option -t "$SESSION" status-right-length 40 >/dev/null 2>&1 || true
+  tmux set-option -t "$SESSION" status-right-length 120 >/dev/null 2>&1 || true
 
-  tmux set-window-option -t "$SESSION" window-status-separator "" >/dev/null 2>&1 || true
-  tmux set-window-option -t "$SESSION" window-status-format \
-    "#[fg=colour244] #I #[fg=colour250]#W " >/dev/null 2>&1 || true
-  tmux set-window-option -t "$SESSION" window-status-current-format \
-    "#[fg=colour236,bg=colour117,bold] #I #W " >/dev/null 2>&1 || true
+  tmux set-option -t "$SESSION" window-status-separator "" >/dev/null 2>&1 || true
+
+  # Apply the window-tab styling to every window in the session so it sticks
+  # regardless of tmux's per-window option scoping.
+  local win
+  for win in $(tmux list-windows -t "$SESSION" -F "#{window_id}" 2>/dev/null); do
+    tmux set-window-option -t "$win" window-status-separator "" >/dev/null 2>&1 || true
+    tmux set-window-option -t "$win" window-status-format \
+      "#[fg=colour244] #I #[fg=colour250]#W " >/dev/null 2>&1 || true
+    tmux set-window-option -t "$win" window-status-current-format \
+      "#[fg=colour236,bg=colour117,bold] #I #W " >/dev/null 2>&1 || true
+  done
 }
 
 create_windows() {

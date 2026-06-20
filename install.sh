@@ -268,20 +268,40 @@ tool_badge() {
   fi
 }
 
+# Cache sudo credentials up front so the silent (spinner-wrapped) installs
+# below never block on a hidden password prompt.
+prime_sudo() {
+  is_root && return 0
+  has_command sudo || return 0
+  info "Requesting sudo access"
+  sudo -v 2>/dev/null || true
+}
+
+# Run a command silently behind a spinner. All output is hidden — the only
+# UI the user sees is the loading bar with our title.
+spin() {
+  local title="$1" cmd="$2"
+
+  if has_command gum; then
+    gum spin --spinner dot \
+      --spinner.foreground "$ACCENT" \
+      --title.foreground "$TEXT" \
+      --title "$title" \
+      -- bash -c "$cmd" >/dev/null 2>&1 || true
+  else
+    info "$title"
+    bash -c "$cmd" >/dev/null 2>&1 || true
+  fi
+}
+
 install_node_if_missing() {
   if has_command node && has_command npm; then
-    success "Node.js/npm already installed"
     return 0
   fi
 
-  info "Installing Node.js 22 (required for Claude Code)"
-  curl -fsSL https://deb.nodesource.com/setup_22.x | run_root bash -
-  apt_install nodejs
+  spin "Installing Node.js 22" \
+    "curl -fsSL https://deb.nodesource.com/setup_22.x | $SUDO bash - && $SUDO apt-get install -y nodejs"
   refresh_path
-
-  has_command node && { success "Node.js/npm installed"; return 0; }
-  warn "Node.js install finished, but it is not on PATH yet"
-  return 1
 }
 
 install_opencode_if_missing() {
@@ -290,13 +310,10 @@ install_opencode_if_missing() {
     return 0
   fi
 
-  info "Installing opencode"
-  curl -fsSL https://opencode.ai/install | bash
+  spin "Installing opencode" "curl -fsSL https://opencode.ai/install | bash"
   refresh_path
 
-  has_command opencode && { success "opencode installed"; return 0; }
-  warn "opencode installer finished, but it is not on PATH yet"
-  return 1
+  has_command opencode && success "opencode installed" || warn "opencode is not on PATH yet"
 }
 
 install_claude_if_missing() {
@@ -305,15 +322,17 @@ install_claude_if_missing() {
     return 0
   fi
 
-  install_node_if_missing || return 1
+  install_node_if_missing
 
-  info "Installing Claude Code"
-  npm install -g @anthropic-ai/claude-code
+  if ! has_command npm; then
+    warn "npm unavailable — skipping Claude Code"
+    return 0
+  fi
+
+  spin "Installing Claude Code" "npm install -g @anthropic-ai/claude-code"
   refresh_path
 
-  has_command claude && { success "Claude Code installed"; return 0; }
-  warn "Claude Code installer finished, but it is not on PATH yet"
-  return 1
+  has_command claude && success "Claude Code installed" || warn "claude is not on PATH yet"
 }
 
 install_codex_if_missing() {
@@ -322,13 +341,10 @@ install_codex_if_missing() {
     return 0
   fi
 
-  info "Installing Codex CLI"
-  curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh
+  spin "Installing Codex CLI" "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"
   refresh_path
 
-  has_command codex && { success "Codex CLI installed"; return 0; }
-  warn "Codex installer finished, but it is not on PATH yet"
-  return 1
+  has_command codex && success "Codex CLI installed" || warn "codex is not on PATH yet"
 }
 
 install_selected_tools() {
@@ -341,6 +357,10 @@ install_selected_tools() {
   fi
 
   echo
+  SUDO=""
+  is_root || SUDO="sudo"
+  prime_sudo
+
   [ "$SELECT_OPENCODE" = "on" ] && { install_opencode_if_missing || true; }
   [ "$SELECT_CLAUDE" = "on" ] && { install_claude_if_missing || true; }
   [ "$SELECT_CODEX" = "on" ] && { install_codex_if_missing || true; }
