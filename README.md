@@ -154,6 +154,13 @@ Detach from tmux and keep the session running:
 
     CTRL + B, then D
 
+Freeze the session and detach (pauses it; resumes automatically on reattach):
+
+    CTRL + B, then F
+
+Normal detach (Ctrl+B D) and dropped connections keep the session running as
+usual — only Ctrl+B F freezes it.
+
 Switch windows:
 
     CTRL + B, then 1

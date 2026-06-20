@@ -85,6 +85,9 @@ command_exists() {
 }
 
 attach_or_switch() {
+  # Resume the session if it was frozen (no-op otherwise) before attaching.
+  signal_session CONT "$SESSION"
+
   if [ -n "$TMUX" ]; then
     tmux switch-client -t "$SESSION"
   else
@@ -128,6 +131,16 @@ style_session() {
     tmux set-window-option -t "$win" window-status-current-format \
       "#[fg=colour236,bg=colour117,bold] #I #W " >/dev/null 2>&1 || true
   done
+
+  # Ctrl+B then F = freeze + detach (intentional); reattach auto-thaws.
+  # Normal Ctrl+B D and dropped connections keep the session running.
+  local dev_bin
+  dev_bin="$(command -v dev 2>/dev/null)"
+  [ -z "$dev_bin" ] && dev_bin="$(cd "$(dirname "$0")" && pwd)/dev"
+
+  tmux bind-key F run-shell -b "$dev_bin freeze-detach #{session_name}" >/dev/null 2>&1 || true
+  tmux set-hook -t "$SESSION" client-attached \
+    "run-shell -b '$dev_bin thaw #{session_name}'" >/dev/null 2>&1 || true
 }
 
 create_windows() {
@@ -308,6 +321,16 @@ freeze_dev() {
   echo "$label: $session"
 }
 
+# Detach all clients from a session, then freeze it. Used by the Ctrl+B F
+# binding so the freeze never hits the "attached" guard.
+freeze_detach() {
+  local session="$2"
+  [ -z "$session" ] && session="$SESSION"
+
+  tmux detach-client -s "$session" 2>/dev/null || true
+  signal_session STOP "$session"
+}
+
 status_dev() {
   if tmux has-session -t "$SESSION" 2>/dev/null; then
     echo "running: $SESSION"
@@ -382,11 +405,15 @@ case "$COMMAND" in
   thaw)
     freeze_dev thaw "$2"
     ;;
+  freeze-detach)
+    freeze_detach "$@"
+    ;;
   *)
     echo "Usage: dev [start|stop|restart|status|list|config] [path]"
     echo "       dev kill <session|fragment>"
     echo "       dev freeze [session|fragment|all]   pause a session (SIGSTOP)"
     echo "       dev thaw   [session|fragment|all]   resume a session (SIGCONT)"
+    echo "       (in tmux: Ctrl+B then F = freeze + detach; reattach resumes)"
     exit 1
     ;;
 esac
