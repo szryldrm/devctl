@@ -144,6 +144,11 @@ install_keybinding() {
   [ -z "$dev_bin" ] && dev_bin="$(cd "$(dirname "$0")" && pwd)/dev"
 
   tmux bind-key C-f run-shell -b "$dev_bin freeze-detach #{session_name}" >/dev/null 2>&1 || true
+
+  # Remove a stale client-attached thaw hook left in the tmux server by older
+  # versions (it printed "thawed: ..." over the pane). Thawing now happens
+  # silently in attach_or_switch.
+  tmux set-hook -u -t "$SESSION" client-attached >/dev/null 2>&1 || true
 }
 
 create_windows() {
