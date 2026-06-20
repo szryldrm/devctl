@@ -131,17 +131,19 @@ style_session() {
     tmux set-window-option -t "$win" window-status-current-format \
       "#[fg=colour236,bg=colour117,bold] #I #W " >/dev/null 2>&1 || true
   done
+}
 
-  # Ctrl+B then Ctrl+F = freeze + detach (intentional); reattach auto-thaws.
-  # C-f avoids clashing with the default prefix 'f' (find-window).
-  # Normal Ctrl+B D and dropped connections keep the session running.
+# Ctrl+B then Ctrl+F = freeze + detach (intentional); reattach auto-thaws
+# (handled silently in attach_or_switch, so no run-shell output overlay).
+# C-f avoids clashing with the default prefix 'f' (find-window). bind-key is a
+# global tmux setting, so installing it on every `dev start` makes it work even
+# for sessions created before this binding existed.
+install_keybinding() {
   local dev_bin
   dev_bin="$(command -v dev 2>/dev/null)"
   [ -z "$dev_bin" ] && dev_bin="$(cd "$(dirname "$0")" && pwd)/dev"
 
   tmux bind-key C-f run-shell -b "$dev_bin freeze-detach #{session_name}" >/dev/null 2>&1 || true
-  tmux set-hook -t "$SESSION" client-attached \
-    "run-shell -b '$dev_bin thaw #{session_name}'" >/dev/null 2>&1 || true
 }
 
 create_windows() {
@@ -186,12 +188,14 @@ start_dev() {
   mkdir -p "$PROJECT_DIR"
 
   if tmux has-session -t "$SESSION" 2>/dev/null; then
+    install_keybinding
     attach_or_switch
     exit 0
   fi
 
   create_windows
   style_session
+  install_keybinding
   tmux select-window -t "$SESSION:1"
   attach_or_switch
 }
