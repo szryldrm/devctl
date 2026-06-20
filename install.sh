@@ -94,12 +94,30 @@ step() {
 }
 
 refresh_path() {
-  export PATH="$HOME/.opencode/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
+  export PATH="$HOME/.opencode/bin:$HOME/.local/bin:$HOME/.bun/bin:/usr/local/bin:$PATH"
 }
 
 has_command() {
   refresh_path
   command -v "$1" >/dev/null 2>&1
+}
+
+# Robustly detect whether a supported tool is already installed. Checks PATH
+# and the common per-tool install locations, so detection does not depend on
+# the current shell's PATH (or interactive-only aliases).
+tool_present() {
+  has_command "$1" && return 0
+  local p
+  for p in \
+    "$HOME/.opencode/bin/$1" \
+    "$HOME/.local/bin/$1" \
+    "$HOME/.bun/bin/$1" \
+    "/usr/local/bin/$1" \
+    "/usr/bin/$1" \
+    "/opt/$1/bin/$1"; do
+    [ -x "$p" ] && return 0
+  done
+  return 1
 }
 
 is_root() { [ "$(id -u)" -eq 0 ]; }
@@ -318,7 +336,7 @@ select_tools() {
   # Split into already-installed (kept, never prompted/installed) vs available.
   local installed=() available=() t
   for t in opencode claude codex; do
-    if has_command "$t"; then installed+=("$t"); else available+=("$t"); fi
+    if tool_present "$t"; then installed+=("$t"); else available+=("$t"); fi
   done
 
   if [ "${#installed[@]}" -gt 0 ]; then
@@ -358,9 +376,9 @@ select_tools() {
   fi
 
   # Final config state: enabled if already installed OR picked to install.
-  has_command opencode && SELECT_OPENCODE="on"; [ "$PICK_OPENCODE" = "on" ] && SELECT_OPENCODE="on"
-  has_command claude && SELECT_CLAUDE="on"; [ "$PICK_CLAUDE" = "on" ] && SELECT_CLAUDE="on"
-  has_command codex && SELECT_CODEX="on"; [ "$PICK_CODEX" = "on" ] && SELECT_CODEX="on"
+  tool_present opencode && SELECT_OPENCODE="on"; [ "$PICK_OPENCODE" = "on" ] && SELECT_OPENCODE="on"
+  tool_present claude && SELECT_CLAUDE="on"; [ "$PICK_CLAUDE" = "on" ] && SELECT_CLAUDE="on"
+  tool_present codex && SELECT_CODEX="on"; [ "$PICK_CODEX" = "on" ] && SELECT_CODEX="on"
 
   return 0
 }
@@ -411,7 +429,7 @@ install_node_if_missing() {
 }
 
 install_opencode_if_missing() {
-  if has_command opencode; then
+  if tool_present opencode; then
     success "opencode already installed"
     return 0
   fi
@@ -423,7 +441,7 @@ install_opencode_if_missing() {
 }
 
 install_claude_if_missing() {
-  if has_command claude; then
+  if tool_present claude; then
     success "Claude Code already installed"
     return 0
   fi
@@ -442,7 +460,7 @@ install_claude_if_missing() {
 }
 
 install_codex_if_missing() {
-  if has_command codex; then
+  if tool_present codex; then
     success "Codex CLI already installed"
     return 0
   fi
