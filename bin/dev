@@ -192,18 +192,36 @@ stop_dev() {
 }
 
 kill_dev() {
-  TARGET="$2"
+  local target="$2"
 
-  if [ -z "$TARGET" ]; then
-    echo "Usage: dev kill <session-name>"
+  if [ -z "$target" ]; then
+    echo "Usage: dev kill <session-name | fragment>"
     exit 1
   fi
 
-  if tmux has-session -t "$TARGET" 2>/dev/null; then
-    tmux kill-session -t "$TARGET"
-    echo "killed: $TARGET"
+  # Exact session name wins.
+  if tmux has-session -t "$target" 2>/dev/null; then
+    tmux kill-session -t "$target"
+    echo "killed: $target"
+    return 0
+  fi
+
+  # Otherwise match dev- sessions containing the fragment (e.g. the hash).
+  local matches count
+  matches="$(tmux list-sessions -F "#{session_name}" 2>/dev/null | grep '^dev-' | grep -F "$target")"
+  count="$(printf '%s' "$matches" | grep -c .)"
+
+  if [ "$count" -eq 0 ]; then
+    echo "not found: $target"
+    exit 1
+  elif [ "$count" -eq 1 ]; then
+    tmux kill-session -t "$matches"
+    echo "killed: $matches"
   else
-    echo "not found: $TARGET"
+    echo "multiple sessions match '$target':"
+    printf '  %s\n' $matches
+    echo "be more specific"
+    exit 1
   fi
 }
 
