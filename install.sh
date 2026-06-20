@@ -74,6 +74,9 @@ run_root() {
   if is_root; then "$@"; else sudo "$@"; fi
 }
 
+SUDO=""
+is_root || SUDO="sudo"
+
 apt_pkg_for() {
   case "$1" in
     ssh) echo "openssh-client" ;;
@@ -90,17 +93,31 @@ require_apt() {
   fi
 }
 
-apt_update_once() {
-  if [ "${APT_UPDATED:-}" != "1" ]; then
-    run_root apt-get update
-    APT_UPDATED=1
-  fi
+# Cache sudo credentials up front so the silent installs below never block on
+# a hidden password prompt. Prompted at most once, and only when needed.
+prime_sudo() {
+  is_root && return 0
+  [ "${SUDO_PRIMED:-}" = "1" ] && return 0
+  has_command sudo || return 0
+  warn "sudo access is required to install packages"
+  sudo -v 2>/dev/null || true
+  SUDO_PRIMED=1
 }
 
-apt_install() {
+apt_update_once() {
+  [ "${APT_UPDATED:-}" = "1" ] && return 0
+  require_apt
+  prime_sudo
+  $SUDO env DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null 2>&1 || true
+  APT_UPDATED=1
+}
+
+# Quiet, non-interactive package install — produces no terminal output.
+apt_install_now() {
   require_apt "$@"
+  prime_sudo
   apt_update_once
-  run_root apt-get install -y "$@"
+  $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@" >/dev/null 2>&1 || true
 }
 
 # -----------------------------------------------------------------------------
@@ -133,22 +150,46 @@ banner() {
 # Dependencies
 # -----------------------------------------------------------------------------
 
+# gum drives the whole UI, so install it first and silently (there is no gum
+# yet to draw a spinner with). On Debian/Ubuntu it usually needs the charm
+# apt repository.
+ensure_gum() {
+  has_command gum && return 0
+
+  echo -e "  ${C_MUTED}Preparing installer…${RESET}"
+
+  apt_install_now gum
+  has_command gum && return 0
+
+  # charm apt repository fallback
+  apt_install_now curl ca-certificates gnupg
+  $SUDO mkdir -p /etc/apt/keyrings >/dev/null 2>&1 || true
+  curl -fsSL https://repo.charm.sh/apt/gpg.key 2>/dev/null |
+    $SUDO gpg --dearmor -o /etc/apt/keyrings/charm.gpg >/dev/null 2>&1 || true
+  echo "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" |
+    $SUDO tee /etc/apt/sources.list.d/charm.list >/dev/null 2>&1 || true
+
+  APT_UPDATED=""
+  apt_install_now gum
+
+  if ! has_command gum; then
+    error "Failed to install gum (required for the installer UI)"
+    exit 1
+  fi
+}
+
 ensure_required_dependencies() {
   echo
-  echo -e "  ${C_ACCENT}${BOLD}BOOTSTRAP${RESET}  ${C_TEXT}${BOLD}Required dependencies${RESET}"
+  echo -e "  ${C_ACCENT}${BOLD}DEPENDENCIES${RESET}"
   rule 56
+  echo
 
   local missing_packages=()
   local seen=""
   local cmd pkg
 
   for cmd in $REQUIRED_COMMANDS; do
-    if has_command "$cmd"; then
-      success "$cmd"
-      continue
-    fi
-
-    warn "$cmd ${C_MUTED}(will install)${RESET}"
+    has_command "$cmd" && continue
     pkg="$(apt_pkg_for "$cmd")"
     case " $seen " in
       *" $pkg "*) ;;
@@ -156,23 +197,26 @@ ensure_required_dependencies() {
     esac
   done
 
-  if [ -f /etc/ssl/certs/ca-certificates.crt ]; then
-    success "ca-certificates"
-  else
-    warn "ca-certificates ${C_MUTED}(will install)${RESET}"
-    missing_packages+=("ca-certificates")
-  fi
+  [ -f /etc/ssl/certs/ca-certificates.crt ] || missing_packages+=("ca-certificates")
 
-  if [ "${#missing_packages[@]}" -gt 0 ]; then
+  if [ "${#missing_packages[@]}" -eq 0 ]; then
+    success "all required dependencies already present"
+  else
+    info "These packages will be installed:"
+    for pkg in "${missing_packages[@]}"; do
+      echo -e "    ${C_ACCENT}•${RESET} ${C_TEXT}${pkg}${RESET}"
+    done
     echo
-    info "Installing: ${C_TEXT}${missing_packages[*]}${RESET}"
-    apt_install "${missing_packages[@]}"
+    prime_sudo
+    spin "Installing dependencies" \
+      "$SUDO env DEBIAN_FRONTEND=noninteractive apt-get update -qq && $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ${missing_packages[*]}"
+    refresh_path
   fi
 
   # The config editor needs python3 + the curses stdlib module.
   if has_command python3 && ! python3 -c "import curses" >/dev/null 2>&1; then
-    warn "python3 is missing the curses module (needed by 'dev config')"
-    apt_install python3 || true
+    spin "Installing python3 (curses)" \
+      "$SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3"
   fi
 
   local still_missing=()
@@ -181,50 +225,12 @@ ensure_required_dependencies() {
   done
 
   if [ "${#still_missing[@]}" -gt 0 ]; then
-    echo
     error "Could not install: ${still_missing[*]}"
     error "Install them manually and re-run ./install.sh"
     exit 1
   fi
 
-  echo
-  success "All required dependencies are present"
-}
-
-# gum drives the rest of the UI. On Debian/Ubuntu it usually needs the
-# charm apt repository, so install it on its own before anything pretty.
-ensure_gum() {
-  echo
-  echo -e "  ${C_ACCENT}${BOLD}BOOTSTRAP${RESET}  ${C_TEXT}${BOLD}Installer UI (gum)${RESET}"
-  rule 56
-
-  if has_command gum; then
-    success "gum already installed"
-    return 0
-  fi
-
-  if apt_install gum >/dev/null 2>&1 && has_command gum; then
-    success "gum installed"
-    return 0
-  fi
-
-  info "Adding charm apt repository"
-  run_root mkdir -p /etc/apt/keyrings
-  curl -fsSL https://repo.charm.sh/apt/gpg.key |
-    run_root gpg --dearmor -o /etc/apt/keyrings/charm.gpg
-  echo "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" |
-    run_root tee /etc/apt/sources.list.d/charm.list >/dev/null
-
-  APT_UPDATED=""
-  apt_install gum
-
-  if has_command gum; then
-    success "gum installed"
-    return 0
-  fi
-
-  error "Failed to install gum"
-  exit 1
+  success "dependencies ready"
 }
 
 # -----------------------------------------------------------------------------
@@ -268,17 +274,8 @@ tool_badge() {
   fi
 }
 
-# Cache sudo credentials up front so the silent (spinner-wrapped) installs
-# below never block on a hidden password prompt.
-prime_sudo() {
-  is_root && return 0
-  has_command sudo || return 0
-  info "Requesting sudo access"
-  sudo -v 2>/dev/null || true
-}
-
-# Run a command silently behind a spinner. All output is hidden — the only
-# UI the user sees is the loading bar with our title.
+# Run a command behind a spinner. gum hides the command's own output and shows
+# only the loading bar with our title — so we must NOT redirect gum's output.
 spin() {
   local title="$1" cmd="$2"
 
@@ -287,7 +284,7 @@ spin() {
       --spinner.foreground "$ACCENT" \
       --title.foreground "$TEXT" \
       --title "$title" \
-      -- bash -c "$cmd" >/dev/null 2>&1 || true
+      -- bash -c "$cmd" || true
   else
     info "$title"
     bash -c "$cmd" >/dev/null 2>&1 || true
@@ -299,8 +296,9 @@ install_node_if_missing() {
     return 0
   fi
 
+  prime_sudo
   spin "Installing Node.js 22" \
-    "curl -fsSL https://deb.nodesource.com/setup_22.x | $SUDO bash - && $SUDO apt-get install -y nodejs"
+    "curl -fsSL https://deb.nodesource.com/setup_22.x | $SUDO bash - && $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs"
   refresh_path
 }
 
@@ -357,9 +355,11 @@ install_selected_tools() {
   fi
 
   echo
-  SUDO=""
-  is_root || SUDO="sudo"
-  prime_sudo
+  info "These tools will be installed:"
+  [ "$SELECT_OPENCODE" = "on" ] && echo -e "    ${C_ACCENT}•${RESET} ${C_TEXT}opencode${RESET}"
+  [ "$SELECT_CLAUDE" = "on" ] && echo -e "    ${C_ACCENT}•${RESET} ${C_TEXT}claude  ${C_MUTED}(+ Node.js)${RESET}"
+  [ "$SELECT_CODEX" = "on" ] && echo -e "    ${C_ACCENT}•${RESET} ${C_TEXT}codex${RESET}"
+  echo
 
   [ "$SELECT_OPENCODE" = "on" ] && { install_opencode_if_missing || true; }
   [ "$SELECT_CLAUDE" = "on" ] && { install_claude_if_missing || true; }
@@ -555,9 +555,9 @@ if [ ! -f "./bin/dev" ] || [ ! -f "./bin/dev-config" ]; then
 fi
 
 refresh_path
-ensure_required_dependencies
 ensure_gum
 banner
+ensure_required_dependencies
 
 select_tools
 install_selected_tools

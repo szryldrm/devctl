@@ -68,6 +68,12 @@ def setup_colors():
         "keylabel":   (text, bar),
         "on":         (dark, green),
         "off":        (dim, offbg),
+        "ok_sel":     (dark, green),
+        "ok_off":     (green, bar),
+        "no_sel":     (dark, red),
+        "no_off":     (red, bar),
+        "neu_sel":    (dark, accent),
+        "neu_off":    (accent, bar),
         "sel_text":   (text, selbg),
         "sel_muted":  (dim, selbg),
         "sel_accent": (accent, selbg),
@@ -378,7 +384,11 @@ def add_item(stdscr, items):
     return name
 
 def confirm_exit(stdscr):
-    options = [("save", "Save"), ("discard", "Discard"), ("cancel", "Cancel")]
+    options = [
+        ("save", "Save", "ok_sel", "ok_off"),
+        ("discard", "Discard", "no_sel", "no_off"),
+        ("cancel", "Cancel", "neu_sel", "neu_off"),
+    ]
     shortcuts = {ord("y"): "save", ord("Y"): "save",
                  ord("n"): "discard", ord("N"): "discard",
                  ord("c"): "cancel", ord("C"): "cancel"}
@@ -406,13 +416,13 @@ def confirm_exit(stdscr):
         title = "Save changes before exiting?"
         put(stdscr, by + 2, bx + (bw - len(title)) // 2, title, attr("panel", bold=True))
 
-        labels = [f"  {label}  " for _, label in options]
+        labels = [f"  {label}  " for _, label, _, _ in options]
         gap = 2
         total = sum(len(s) for s in labels) + gap * (len(labels) - 1)
         x = bx + (bw - total) // 2
         for i, label in enumerate(labels):
-            chosen = i == sel
-            a = attr("key", bold=True) if chosen else attr("off", bold=True)
+            _, _, sel_pair, off_pair = options[i]
+            a = attr(sel_pair, bold=True) if i == sel else attr(off_pair, bold=True)
             put(stdscr, by + 4, x, label, a)
             x += len(label) + gap
 
