@@ -324,6 +324,40 @@ ensure_required_dependencies() {
   success "dependencies ready"
 }
 
+# Optional: compressed RAM swap so the kernel can page out idle sessions
+# (opencode/claude/codex) under memory pressure, reclaiming RAM without
+# touching the processes. The cleanest way to run many sessions at once.
+ensure_zram() {
+  echo
+  echo -e "  ${C_ACCENT}${BOLD}MEMORY${RESET}"
+  rule 56
+  echo
+
+  if grep -q zram /proc/swaps 2>/dev/null; then
+    success "zram swap already active"
+    return 0
+  fi
+
+  if ! gum confirm "Enable zram (compressed RAM swap) to fit more sessions in RAM?"; then
+    info "skipped zram"
+    return 0
+  fi
+
+  prime_sudo
+  spin "Enabling zram swap" \
+    "$SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y $APT_Q zram-tools && \
+     printf 'ALGO=zstd\nPERCENT=50\n' | $SUDO tee /etc/default/zramswap >/dev/null && \
+     { $SUDO systemctl restart zramswap || $SUDO systemctl enable --now zramswap; } && \
+     { $SUDO service zramswap restart 2>/dev/null || true; }"
+
+  if grep -q zram /proc/swaps 2>/dev/null; then
+    success "zram swap enabled (zstd, 50% of RAM)"
+  else
+    warn "zram-tools installed, but no zram device is active yet"
+    warn "(some VMs/containers lack the zram kernel module) — see the log"
+  fi
+}
+
 # -----------------------------------------------------------------------------
 # Optional AI tools
 # -----------------------------------------------------------------------------
@@ -737,6 +771,7 @@ ensure_gum
 ensure_locale
 banner
 ensure_required_dependencies
+ensure_zram
 
 select_tools
 install_selected_tools

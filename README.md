@@ -64,21 +64,6 @@ Kill a development session (full name or a fragment such as the hash):
 
     dev kill <session-name|fragment>
 
-Freeze / thaw sessions to stop them eating CPU (and RAM, with swap):
-
-    dev freeze              # freeze the current folder's session
-    dev freeze <fragment>   # freeze a specific session
-    dev freeze all          # freeze every session (skips the attached one)
-    dev thaw <fragment|all> # resume
-
-`freeze` sends SIGSTOP to every process in the session: it pauses exactly where
-it was and uses no CPU; `thaw` (SIGCONT) resumes instantly, right where it left
-off — nothing restarts. Physical RAM is reclaimed only if the host has swap or
-zram (the kernel pages the stopped processes out under memory pressure); without
-swap a frozen session keeps its RAM but burns no CPU. `dev list` marks frozen
-sessions. You cannot freeze the session you are currently attached to — detach
-first (Ctrl+B then D).
-
 Open the interactive config editor:
 
     dev config
@@ -132,6 +117,21 @@ Install logs are written under:
 
     ~/.config/devctl/logs/
 
+## Running many sessions (RAM)
+
+Each session keeps its tools (opencode/claude/codex) running, which uses RAM.
+To fit many sessions at once, enable compressed RAM swap (zram) so the kernel
+pages out idle sessions automatically — they stay exactly where they were and
+resume instantly, with no process freezing or terminal corruption.
+
+The installer offers to set this up. To do it manually:
+
+    sudo apt install zram-tools
+    printf 'ALGO=zstd\nPERCENT=50\n' | sudo tee /etc/default/zramswap
+    sudo systemctl restart zramswap
+
+(zram needs the kernel's zram module, which some minimal VMs/containers lack.)
+
 ## Project-based sessions
 
 devctl creates a different tmux session for each project directory.
@@ -153,13 +153,6 @@ These two folders will have separate tmux sessions.
 Detach from tmux and keep the session running:
 
     CTRL + B, then D
-
-Freeze the session and detach (pauses it; resumes automatically on reattach):
-
-    CTRL + B, then CTRL + F
-
-Normal detach (Ctrl+B D) and dropped connections keep the session running as
-usual — only Ctrl+B Ctrl+F freezes it.
 
 Switch windows:
 

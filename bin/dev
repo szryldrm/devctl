@@ -85,9 +85,6 @@ command_exists() {
 }
 
 attach_or_switch() {
-  # Resume the session if it was frozen (no-op otherwise) before attaching.
-  signal_session CONT "$SESSION"
-
   if [ -n "$TMUX" ]; then
     tmux switch-client -t "$SESSION"
   else
@@ -133,21 +130,12 @@ style_session() {
   done
 }
 
-# Ctrl+B then Ctrl+F = freeze + detach (intentional); reattach auto-thaws
-# (handled silently in attach_or_switch, so no run-shell output overlay).
-# C-f avoids clashing with the default prefix 'f' (find-window). bind-key is a
-# global tmux setting, so installing it on every `dev start` makes it work even
-# for sessions created before this binding existed.
-install_keybinding() {
-  local dev_bin
-  dev_bin="$(command -v dev 2>/dev/null)"
-  [ -z "$dev_bin" ] && dev_bin="$(cd "$(dirname "$0")" && pwd)/dev"
-
-  tmux bind-key C-f run-shell -b "$dev_bin freeze-detach #{session_name}" >/dev/null 2>&1 || true
-
-  # Remove a stale client-attached thaw hook left in the tmux server by older
-  # versions (it printed "thawed: ..." over the pane). Thawing now happens
-  # silently in attach_or_switch.
+# Undo the freeze experiment from older versions: an earlier release bound
+# Ctrl+B Ctrl+F to a freeze-detach and set a client-attached hook on sessions.
+# Freezing TUI tools via SIGSTOP corrupted them, so the feature was dropped;
+# clean up anything those versions left in the running tmux server.
+cleanup_legacy_tmux() {
+  tmux unbind-key C-f >/dev/null 2>&1 || true
   tmux set-hook -u -t "$SESSION" client-attached >/dev/null 2>&1 || true
 }
 
@@ -193,14 +181,14 @@ start_dev() {
   mkdir -p "$PROJECT_DIR"
 
   if tmux has-session -t "$SESSION" 2>/dev/null; then
-    install_keybinding
+    cleanup_legacy_tmux
     attach_or_switch
     exit 0
   fi
 
   create_windows
   style_session
-  install_keybinding
+  cleanup_legacy_tmux
   tmux select-window -t "$SESSION:1"
   attach_or_switch
 }
@@ -258,89 +246,6 @@ kill_dev() {
   echo "killed: $session"
 }
 
-current_attached_session() {
-  [ -n "$TMUX" ] && tmux display-message -p '#{session_name}' 2>/dev/null
-}
-
-# Recursively echo all descendant PIDs of a PID.
-descendants() {
-  local pid="$1" child
-  for child in $(pgrep -P "$pid" 2>/dev/null); do
-    descendants "$child"
-    printf '%s ' "$child"
-  done
-}
-
-# Send STOP or CONT to every process in a session's panes (and their children).
-signal_session() {
-  local sig="$1" session="$2" pid kids
-  for pid in $(tmux list-panes -s -t "$session" -F "#{pane_pid}" 2>/dev/null); do
-    kids="$(descendants "$pid")"
-    if [ "$sig" = "STOP" ]; then
-      kill -STOP $kids "$pid" 2>/dev/null || true
-    else
-      kill -CONT "$pid" $kids 2>/dev/null || true
-    fi
-  done
-}
-
-is_frozen() {
-  local pid
-  pid="$(tmux list-panes -s -t "$1" -F "#{pane_pid}" 2>/dev/null | head -1)"
-  [ -n "$pid" ] || return 1
-  case "$(ps -o state= -p "$pid" 2>/dev/null)" in
-    T*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-# freeze (STOP) / thaw (CONT) a session — default current, a fragment, or "all".
-freeze_dev() {
-  local verb="$1" target="$2" sig label
-  if [ "$verb" = "freeze" ]; then sig="STOP"; label="frozen"; else sig="CONT"; label="thawed"; fi
-
-  local current; current="$(current_attached_session)"
-
-  if [ "$target" = "all" ]; then
-    local session
-    for session in $(tmux list-sessions -F "#{session_name}" 2>/dev/null | grep '^dev-'); do
-      if [ "$sig" = "STOP" ] && [ "$session" = "$current" ]; then
-        echo "skipped (attached): $session"
-        continue
-      fi
-      signal_session "$sig" "$session"
-      echo "$label: $session"
-    done
-    return 0
-  fi
-
-  local session rc
-  session="$(resolve_session "${target:-$SESSION}")"; rc=$?
-  if [ $rc -ne 0 ]; then
-    [ $rc -eq 1 ] && echo "not found: ${target:-$SESSION}"
-    exit 1
-  fi
-
-  if [ "$sig" = "STOP" ] && [ "$session" = "$current" ]; then
-    echo "refusing to freeze the session you are attached to: $session"
-    echo "detach first (Ctrl+B then D), then: dev freeze $session"
-    exit 1
-  fi
-
-  signal_session "$sig" "$session"
-  echo "$label: $session"
-}
-
-# Detach all clients from a session, then freeze it. Used by the Ctrl+B F
-# binding so the freeze never hits the "attached" guard.
-freeze_detach() {
-  local session="$2"
-  [ -z "$session" ] && session="$SESSION"
-
-  tmux detach-client -s "$session" 2>/dev/null || true
-  signal_session STOP "$session"
-}
-
 status_dev() {
   if tmux has-session -t "$SESSION" 2>/dev/null; then
     echo "running: $SESSION"
@@ -353,19 +258,7 @@ status_dev() {
 }
 
 list_dev() {
-  local any=0 line session
-  while IFS= read -r line; do
-    [ -z "$line" ] && continue
-    any=1
-    session="${line%%:*}"
-    if is_frozen "$session"; then
-      echo "$line  (frozen)"
-    else
-      echo "$line"
-    fi
-  done < <(tmux list-sessions 2>/dev/null | grep '^dev-')
-
-  [ "$any" -eq 0 ] && echo "no dev sessions"
+  tmux list-sessions 2>/dev/null | grep '^dev-' || echo "no dev sessions"
 }
 
 run_config_editor() {
@@ -409,21 +302,9 @@ case "$COMMAND" in
   config)
     run_config_editor
     ;;
-  freeze)
-    freeze_dev freeze "$2"
-    ;;
-  thaw)
-    freeze_dev thaw "$2"
-    ;;
-  freeze-detach)
-    freeze_detach "$@"
-    ;;
   *)
     echo "Usage: dev [start|stop|restart|status|list|config] [path]"
     echo "       dev kill <session|fragment>"
-    echo "       dev freeze [session|fragment|all]   pause a session (SIGSTOP)"
-    echo "       dev thaw   [session|fragment|all]   resume a session (SIGCONT)"
-    echo "       (in tmux: Ctrl+B then Ctrl+F = freeze + detach; reattach resumes)"
     exit 1
     ;;
 esac
